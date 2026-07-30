@@ -1,0 +1,43 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+go.work.sum
+
+# Build output
+bin/
+dist/
+server/internal/web/dist/
+
+# Node
+node_modules/
+.vite/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,77 @@
+# Architecture
+
+## Repository layout
+
+Target, not current state.
+
+```
+nefix/
+├── server/
+│   ├── cmd/nefix/            entry point
+│   ├── internal/
+│   │   ├── http/             handlers, routing, middleware
+│   │   ├── store/            SQLite access, hand-written SQL
+│   │   ├── migrations/       numbered .sql files, embedded
+│   │   └── web/dist/         copied frontend build, gitignored
+│   └── go.mod
+├── web/
+│   ├── src/
+│   │   ├── components/       never call the API
+│   │   ├── db/               Dexie schema and queries
+│   │   └── sync/             the only code that knows the server exists
+│   ├── index.html
+│   └── package.json
+└── docs/
+    ├── ARCHITECTURE.md
+    ├── API.md
+    └── decisions/
+```
+
+## Data flow
+
+A component reads and writes IndexedDB through Dexie and never touches
+the network. `web/src/sync/` observes local changes, pushes them to
+`/api/v1/`, pulls remote changes back, and writes them into IndexedDB,
+where the component sees them like any other local change. The server
+writes to SQLite. Nothing skips a step: a component that wants server
+data waits for sync to put it in IndexedDB, and a handler that wants
+client data waits for sync to send it.
+
+## Embedding the frontend
+
+The build copies `web/dist` into `server/internal/web/dist/`, which is
+gitignored, because `go:embed` cannot reach outside its own module
+directory. The result is one binary that serves both the API and the
+client. Not implemented yet.
+
+## Sync
+
+Every synced row carries `version` and `updated_at`. A push that arrives
+with a stale `version` is a conflict, and a conflict creates a fork owned
+by whoever was editing. There is no merge dialog and no CRDT.
+
+## Migrations
+
+Numbered forward-only `.sql` files embedded in the binary. At startup,
+before the listener binds, the applied set is read from
+`schema_migrations` and anything newer runs inside a transaction. A
+failure exits non-zero, so a process that is listening has a schema that
+matches its code. An applied migration is never edited.
+
+## Release and deploy
+
+| Tag           | Channel    | Environment |
+|---------------|------------|-------------|
+| `v0.4.0`      | stable     | production  |
+| `v0.4.0-rc.1` | prerelease | staging     |
+
+A tag triggers GoReleaser, which publishes a static linux/amd64 binary
+and checksums to a GitHub Release. A systemd timer on the host polls the
+releases API every five minutes, verifies the checksum, backs up the
+database, unpacks to `/opt/nefix/releases/<tag>/`, repoints the
+`/opt/nefix/current` symlink, restarts the unit, and polls `/health`. If
+health does not come up within 30 seconds it repoints the symlink to the
+previous release and restarts. The last three releases are kept. GitHub
+holds no credentials for the host and never connects to it. Staging
+arrives in phase 4; production only until then. None of this is
+implemented yet.
