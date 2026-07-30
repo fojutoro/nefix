@@ -58,6 +58,14 @@ AGPL-3.0, meant to be contributable by strangers.
   refactor, test.
 - `gofmt` and `go vet` clean before every commit.
 - When done, state what you did NOT do that might be expected.
+- Do not run `git commit`. Leave changes in the working tree; the author
+  reads the diff, stages and commits.
+- Create only files that were explicitly requested. If another file seems necessary, say so and stop.
+- Unless a line budget is given, keep a single change under 150 lines of new code. If the task needs more, stop and say why.
+- If a file already exists, never assume its contents. Print its first ten lines and its line count, and stop for instructions.
+- Never state that content matches a specification without showing the comparison that proves it.
+- i18n is react-i18next with bundled resources; dates are `Intl`. Do not
+  hand-roll a translation helper or install a date library.
 
 ## Out of scope for v1 — refuse and cite this file
 

@@ -21,7 +21,7 @@ routing. No web framework. SQL is hand-written; no ORM and no query
 builder.
 
 Simplicity beats cleverness. If a change makes the code harder for a
-stranger to read, it loses, even when it is shorter or faster.
+stranger to read, it loses, even when it is shorter or faster. This obviously has a middle ground...
 
 ## Branching
 
