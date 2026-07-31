@@ -19,10 +19,20 @@ Status: Pre-v1, phase 1 of 8.
 ## Run it
 
 ```
+git clone https://github.com/fojutoro/nefix.git
+cd nefix
 make dev
 ```
 
-Lands in phase 1. There is nothing to run yet.
+Then open <http://localhost:8080/health>.
+
+## Development
+
+- `make dev` — run the server with version and commit baked in
+- `make test` — run the server tests
+- `make build` — build a static binary into `bin/nefix`
+- `make lint` — gofmt, then `go vet`, then staticcheck
+- `make clean` — remove `bin/`
 
 ## Documentation
 
