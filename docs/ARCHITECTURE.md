@@ -60,8 +60,8 @@ matches its code. An applied migration is never edited.
 
 ## Release and deploy
 
-| Tag           | Channel    | Environment |
-|---------------|------------|-------------|
+| Tag             | Channel    | Environment |
+| --------------- | ---------- | ----------- |
 | `v0.4.0`      | stable     | production  |
 | `v0.4.0-rc.1` | prerelease | staging     |
 
