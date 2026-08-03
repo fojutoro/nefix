@@ -11,7 +11,7 @@ nefix/
 │   ├── internal/
 │   │   ├── http/             handlers, routing, middleware
 │   │   ├── store/            SQLite access, hand-written SQL
-│   │   ├── migrations/       numbered .sql files, embedded
+│   │   │   └── migrations/   numbered .sql files, embedded
 │   │   └── web/dist/         copied frontend build, gitignored
 │   └── go.mod
 ├── web/
@@ -52,7 +52,9 @@ by whoever was editing. There is no merge dialog and no CRDT.
 
 ## Migrations
 
-Numbered forward-only `.sql` files embedded in the binary. At startup,
+Numbered forward-only `.sql` files in `server/internal/store/migrations/`,
+embedded into the binary from the `store` package because `go:embed` cannot
+reach outside its own directory. At startup,
 before the listener binds, the applied set is read from
 `schema_migrations` and anything newer runs inside a transaction. A
 failure exits non-zero, so a process that is listening has a schema that

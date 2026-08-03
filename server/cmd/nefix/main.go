@@ -12,6 +12,7 @@ import (
 	"time"
 
 	nefixhttp "github.com/fojutoro/nefix/server/internal/http"
+	"github.com/fojutoro/nefix/server/internal/store"
 )
 
 var (
@@ -22,12 +23,29 @@ var (
 // Localhost only: a reverse proxy sits in front.
 const defaultAddr = "127.0.0.1:8080"
 
+const defaultDBPath = "nefix.db"
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// store logs migrations through the default logger.
+	slog.SetDefault(logger)
 
 	addr := os.Getenv("NEFIX_ADDR")
 	if addr == "" {
 		addr = defaultAddr
+	}
+
+	dbPath := os.Getenv("NEFIX_DB")
+	if dbPath == "" {
+		dbPath = defaultDBPath
+	}
+
+	// Before the listener binds: a process that is accepting requests must
+	// have a schema that matches its code.
+	db, err := store.Open(dbPath)
+	if err != nil {
+		logger.Error("opening database failed", "path", dbPath, "error", err)
+		os.Exit(1)
 	}
 
 	srv := &http.Server{
@@ -45,6 +63,7 @@ func main() {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		logger.Error("listen failed", "addr", addr, "error", err)
+		db.Close()
 		os.Exit(1)
 	}
 
@@ -63,6 +82,7 @@ func main() {
 	select {
 	case err := <-serveErr:
 		logger.Error("serve failed", "error", err)
+		db.Close()
 		os.Exit(1)
 	case <-ctx.Done():
 		stop()
@@ -74,6 +94,12 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("shutdown failed", "error", err)
+		db.Close()
+		os.Exit(1)
+	}
+
+	if err := db.Close(); err != nil {
+		logger.Error("closing database failed", "error", err)
 		os.Exit(1)
 	}
 
