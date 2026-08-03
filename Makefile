@@ -3,10 +3,12 @@ COMMIT  := $(shell git rev-parse --short HEAD)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
 STATICCHECK_VERSION := v0.7.0
+GORELEASER_VERSION := v2.17.1
 GOBIN := $(shell go env GOPATH)/bin
 STATICCHECK := $(shell command -v staticcheck 2>/dev/null || echo $(GOBIN)/staticcheck)
+GORELEASER := $(shell command -v goreleaser 2>/dev/null || echo $(GOBIN)/goreleaser)
 
-.PHONY: help dev test build lint clean
+.PHONY: help dev test build lint release-check clean
 
 help:
 	@echo "Targets:"
@@ -14,6 +16,7 @@ help:
 	@echo "  test   run the server tests"
 	@echo "  build  static binary into bin/nefix"
 	@echo "  lint   gofmt, go vet, staticcheck"
+	@echo "  release-check  validate .goreleaser.yml and build a snapshot"
 	@echo "  clean  remove bin/"
 
 dev:
@@ -39,6 +42,14 @@ lint:
 	@$(STATICCHECK) --version 2>/dev/null | grep -q "$(STATICCHECK_VERSION)" || \
 		go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
 	cd server && $(STATICCHECK) ./...
+
+release-check:
+	@$(GORELEASER) --version 2>/dev/null | grep -q "$(GORELEASER_VERSION)" || \
+		go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
+	$(GORELEASER) check
+	# --single-target filters to the host target, which is not in the build
+	# matrix, so without GOOS/GOARCH it builds nothing and still exits 0.
+	GOOS=linux GOARCH=amd64 $(GORELEASER) build --snapshot --clean --single-target
 
 clean:
 	rm -rf bin

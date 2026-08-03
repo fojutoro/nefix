@@ -1,0 +1,41 @@
+version: 2
+
+project_name: nefix
+
+builds:
+  - id: nefix
+    dir: server
+    main: ./cmd/nefix
+    binary: nefix
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64]
+    # .Tag, not .Version: .Version has the leading v stripped, so the binary
+    # would report 0.1.0 while the releases API reports v0.1.0, and the
+    # updater compares those two strings.
+    ldflags:
+      - -s -w -X main.version={{.Tag}} -X main.commit={{.ShortCommit}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: nefix_{{ .Tag }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ .Tag }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  use: git
+  filters:
+    exclude:
+      - '^Merge '
+
+# prerelease: auto routes -rc.N tags to staging, per ADR 0002.
+release:
+  prerelease: auto
