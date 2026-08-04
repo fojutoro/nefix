@@ -9,7 +9,7 @@ import (
 
 func TestHealth(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New("v0.1.0", "abc1234").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	New("v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	res := rec.Result()
 	defer res.Body.Close()
@@ -33,7 +33,7 @@ func TestHealth(t *testing.T) {
 
 func TestHealthRejectsPost(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New("v0.1.0", "abc1234").ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
+	New("v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
@@ -42,7 +42,7 @@ func TestHealthRejectsPost(t *testing.T) {
 
 func TestUnknownPath(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New("v0.1.0", "abc1234").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/unknown_path", nil))
+	New("v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/unknown_path", nil))
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
