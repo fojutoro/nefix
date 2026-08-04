@@ -13,6 +13,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
+    // Rendering a component needs a DOM. The db tests run happily under it.
+    environment: 'jsdom',
   },
 })
