@@ -1,0 +1,207 @@
+#!/bin/bash
+# nefix-update: Deploy a release to the VPS
+# Installed manually to /usr/local/bin/nefix-update
+# Will be driven by a systemd timer later
+set -euo pipefail
+
+# Configuration (overridable from environment)
+REPO="${REPO:-fojutoro/nefix}"
+ROOT="${ROOT:-/opt/nefix}"
+SERVICE="${SERVICE:-nefix}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8009/health}"
+KEEP="${KEEP:-3}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-30}"
+
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+die() {
+  log "ERROR: $*" >&2
+  exit 1
+}
+
+usage() {
+  echo "Usage: $0 [--yes|--check|--debug]" >&2
+  exit 2
+}
+
+trap 'die "failed at line $LINENO"' ERR
+
+# Parse flags
+check_mode=false
+skip_confirm=false
+debug_mode=false
+for arg in "$@"; do
+  case "$arg" in
+    --check) check_mode=true ;;
+    --yes) skip_confirm=true ;;
+    --debug) debug_mode=true ;;
+    --*) usage ;;
+  esac
+done
+
+if $debug_mode; then
+  set -x
+fi
+
+# Require root
+if [[ $EUID -ne 0 ]]; then
+  die "must run as root"
+fi
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Get running version from health endpoint
+running_version="none"
+if health_json=$(curl -fsS --max-time 5 "$HEALTH_URL"); then
+  running_version=$(printf '%s' "$health_json" |
+    grep -o '"version":[[:space:]]*"[^"]*' | head -1 | cut -d'"' -f4) || true
+  if [[ -z "$running_version" ]]; then
+    die "could not parse version from health response: $health_json"
+  fi
+fi
+log "running: $running_version"
+
+# Fetch latest release from GitHub
+release_json="$tmpdir/release.json"
+api_url="https://api.github.com/repos/$REPO/releases/latest"
+if ! http_code=$(curl -fsS --max-time 10 -o "$release_json" -w '%{http_code}' "$api_url"); then
+  case "$http_code" in
+    403|429) die "GitHub rate limit exceeded (HTTP $http_code) for $api_url" ;;
+    *) die "fetch failed (HTTP ${http_code:-000}) for $api_url" ;;
+  esac
+fi
+
+# The API pretty-prints, so the space after the colon is not optional.
+latest_version=$(grep -o '"tag_name":[[:space:]]*"[^"]*' "$release_json" |
+  head -1 | cut -d'"' -f4) || true
+if [[ -z "$latest_version" ]]; then
+  log "raw response from $api_url:" >&2
+  cat "$release_json" >&2
+  die "could not parse latest version"
+fi
+log "latest: $latest_version"
+
+# Compare versions
+if [[ "$running_version" == "$latest_version" ]]; then
+  log "already on $latest_version"
+  exit 0
+fi
+
+# GoReleaser name_template is nefix_{{ .Tag }}_{{ .Os }}_{{ .Arch }} and the
+# only build target is linux/amd64. Derived once, used for both the download
+# and the checksums.txt lookup.
+asset="nefix_${latest_version}_linux_amd64.tar.gz"
+url_base="https://github.com/$REPO/releases/download/$latest_version"
+asset_url="$url_base/$asset"
+checksums_url="$url_base/checksums.txt"
+if $debug_mode; then
+  log "asset url: $asset_url"
+  log "checksums url: $checksums_url"
+fi
+
+# Confirm the release actually carries the asset before anything destructive
+if ! asset_status=$(curl -fsS -I -L --max-time 15 -o /dev/null -w '%{http_code}' "$asset_url"); then
+  die "release asset not available (HTTP ${asset_status:-000}): $asset_url"
+fi
+if [[ "$asset_status" != "200" ]]; then
+  die "release asset not available (HTTP $asset_status): $asset_url"
+fi
+
+# Check mode: report and exit
+if $check_mode; then
+  log "would update $running_version -> $latest_version"
+  exit 0
+fi
+
+# Confirmation prompt unless --yes
+if ! $skip_confirm; then
+  echo "Update from $running_version to $latest_version? (yes/no)" >&2
+  read -r answer
+  if [[ "$answer" != "yes" ]]; then
+    log "aborted"
+    exit 0
+  fi
+fi
+
+# Download release tarball and checksums
+log "downloading $latest_version"
+curl -fsS -L -o "$tmpdir/$asset" "$asset_url" || die "download failed: $asset_url"
+curl -fsS -L -o "$tmpdir/checksums.txt" "$checksums_url" ||
+  die "checksums download failed: $checksums_url"
+
+# Verify checksum before touching anything
+log "verifying checksum"
+cd "$tmpdir"
+grep -F "$asset" checksums.txt >asset.sha256 ||
+  die "no checksum entry for $asset in checksums.txt"
+sha256sum -c asset.sha256 || die "checksum verification failed"
+cd /
+
+# Back up database using sqlite3 .backup (safe against live writes)
+if [[ -f "$ROOT/data/nefix.db" ]]; then
+  log "backing up database"
+  backup_file="$ROOT/backups/pre-${latest_version}-$(date +%s).db"
+  mkdir -p "$ROOT/backups"
+  sqlite3 "$ROOT/data/nefix.db" ".backup '$backup_file'" || die "backup failed"
+  size=$(stat -c%s "$backup_file")
+  log "backup: $backup_file ($size bytes)"
+else
+  backup_file=""
+fi
+
+# Unpack release and set ownership
+log "unpacking release"
+mkdir -p "$ROOT/releases/$latest_version"
+tar -xzf "$tmpdir/$asset" -C "$ROOT/releases/$latest_version"
+chown -R nefix:nefix "$ROOT/releases/$latest_version" || true
+
+# Record current symlink target for rollback, then repoint
+old_target=$(readlink "$ROOT/current") || old_target="none"
+log "updating symlink to $latest_version"
+ln -sfn "$ROOT/releases/$latest_version" "$ROOT/current"
+
+# Restart the service
+log "restarting service"
+systemctl restart "$SERVICE" || die "service restart failed"
+
+# Poll health endpoint until service reports correct version or timeout
+log "waiting for service (up to $HEALTH_TIMEOUT seconds)"
+for ((i = 0; i < HEALTH_TIMEOUT; i++)); do
+  if health_json=$(curl -fsS --max-time 2 "$HEALTH_URL"); then
+    if printf '%s' "$health_json" |
+      grep -q "\"version\":[[:space:]]*\"$latest_version\""; then
+      log "service ready at $latest_version"
+      break
+    fi
+  fi
+  sleep 1
+done
+
+# Final health check: 200 response AND correct version
+if ! health_json=$(curl -fsS --max-time 2 "$HEALTH_URL") ||
+  ! printf '%s' "$health_json" |
+    grep -q "\"version\":[[:space:]]*\"$latest_version\""; then
+  log "service failed to start with $latest_version, rolling back"
+  ln -sfn "$old_target" "$ROOT/current"
+  if systemctl restart "$SERVICE"; then
+    log "rollback successful"
+  else
+    log "rollback FAILED - manual intervention needed"
+  fi
+  if [[ -n "$backup_file" ]]; then
+    log "database backup available: $backup_file"
+  fi
+  die "deployment failed"
+fi
+
+# Prune old releases, keeping only KEEP newest
+log "pruning releases (keeping $KEEP newest)"
+cd "$ROOT/releases"
+find . -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' |
+  sort -rn | tail -n +$((KEEP + 1)) | cut -d' ' -f2- | xargs -r rm -rf
+cd /
+
+log "deployment complete: $latest_version"
