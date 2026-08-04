@@ -8,13 +8,13 @@ GOBIN := $(shell go env GOPATH)/bin
 STATICCHECK := $(shell command -v staticcheck 2>/dev/null || echo $(GOBIN)/staticcheck)
 GORELEASER := $(shell command -v goreleaser 2>/dev/null || echo $(GOBIN)/goreleaser)
 
-.PHONY: help dev test build lint go-lint release-check clean \
-	web-install web-dev web-build web-lint
+.PHONY: help dev test go-test build lint go-lint release-check clean \
+	web-install web-dev web-build web-lint web-test
 
 help:
 	@echo "Targets:"
 	@echo "  dev    run the server on 127.0.0.1:8080"
-	@echo "  test   run the server tests"
+	@echo "  test   go-test and web-test"
 	@echo "  build  static binary into bin/nefix"
 	@echo "  lint   go-lint and web-lint plus the web type check"
 	@echo "  release-check  validate .goreleaser.yml and build a snapshot"
@@ -23,11 +23,16 @@ help:
 	@echo "  web-dev      vite dev server on 127.0.0.1:5173"
 	@echo "  web-build    type check, then vite build into web/dist"
 	@echo "  web-lint     eslint"
+	@echo "  web-test     vitest"
 
 dev:
 	go -C server run -ldflags "$(LDFLAGS)" ./cmd/nefix
 
-test:
+# The CI jobs run go-test and web-test separately, so neither runner needs
+# the other language installed.
+test: go-test web-test
+
+go-test:
 	go -C server test ./...
 
 # CGO_ENABLED=0 because the deployed binary must be static.
@@ -71,6 +76,9 @@ web-build:
 
 web-lint:
 	npm --prefix web run lint
+
+web-test:
+	npm --prefix web run test
 
 clean:
 	rm -rf bin

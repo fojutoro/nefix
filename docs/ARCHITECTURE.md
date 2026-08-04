@@ -16,6 +16,7 @@ nefix/
 │   └── go.mod
 ├── web/
 │   ├── src/
+│   │   ├── db/               Dexie schema and note CRUD
 │   │   ├── i18n/             en.ts, sk.ts, bundled at build time
 │   │   ├── App.tsx           the one page
 │   │   ├── health.ts         reads /health; temporary, replaced by sync/
@@ -47,6 +48,14 @@ where the component sees them like any other local change. The server
 writes to SQLite. Nothing skips a step: a component that wants server
 data waits for sync to put it in IndexedDB, and a handler that wants
 client data waits for sync to send it.
+
+## Local schema
+
+`web/src/db/` holds one IndexedDB store, `notes`, keyed by a
+client-generated UUIDv7 string, so a note can be created offline and its
+ids sort by creation time. Deletes are soft: `deletedAt` is set and every
+read filters it out, because a removed row cannot be told apart from one
+that never existed.
 
 ## Embedding the frontend
 

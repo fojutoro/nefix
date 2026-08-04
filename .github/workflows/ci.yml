@@ -23,7 +23,7 @@ jobs:
         with:
           go-version-file: server/go.mod
       - run: make go-lint
-      - run: make test
+      - run: make go-test
       - run: make build
 
   web:
@@ -37,4 +37,5 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: make web-install
       - run: make web-lint
+      - run: make web-test
       - run: make web-build

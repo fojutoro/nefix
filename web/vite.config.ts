@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 // Development runs two processes: Vite on 5173 and the Go server on 8080.
@@ -11,5 +11,8 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:8080',
       '/health': 'http://127.0.0.1:8080',
     },
+  },
+  test: {
+    include: ['src/**/*.test.ts'],
   },
 })
