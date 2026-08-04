@@ -16,6 +16,8 @@ server/internal/web/dist/
 
 # Node
 node_modules/
+web/node_modules/
+web/dist/
 .vite/
 npm-debug.log*
 yarn-error.log*

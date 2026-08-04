@@ -1,0 +1,39 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  margin: 0 auto;
+  max-width: 40rem;
+  padding: 2rem 1rem;
+}
+
+h1 {
+  margin: 0;
+}
+
+dl {
+  display: grid;
+  gap: 0.25rem 1rem;
+  grid-template-columns: max-content 1fr;
+}
+
+dt {
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  margin-top: 1.5rem;
+  padding: 0.5rem 1rem;
+}
