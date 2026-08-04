@@ -2,7 +2,6 @@ package http
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -24,9 +23,7 @@ func userFrom(ctx context.Context) (*store.User, bool) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+	writeJSON(w, status, map[string]string{"error": message})
 }
 
 // Holds what the middleware needs; withUser keeps the signature the routes use.
