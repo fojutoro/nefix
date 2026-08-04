@@ -33,7 +33,10 @@ func normalise(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-const userColumns = `id, username, display_name, email, password_hash, role, faculty_id, created_at`
+// Qualified because sessions also has a created_at, so an unqualified list is
+// ambiguous once these columns are selected through a join.
+const userColumns = `users.id, users.username, users.display_name, users.email,
+	users.password_hash, users.role, users.faculty_id, users.created_at`
 
 func scanUser(row *sql.Row) (*User, error) {
 	var u User

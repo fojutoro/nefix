@@ -48,8 +48,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Only an explicit "false" disables it; anything else stays secure.
+	secureCookies := os.Getenv("NEFIX_SECURE_COOKIES") != "false"
+	if !secureCookies {
+		logger.Warn("secure cookies disabled, development only", "env", "NEFIX_SECURE_COOKIES=false")
+	}
+
 	srv := &http.Server{
-		Handler:           nefixhttp.New(version, commit),
+		Handler:           nefixhttp.New(version, commit, db, nefixhttp.CookieConfig{Secure: secureCookies}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
