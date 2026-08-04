@@ -17,9 +17,10 @@ nefix/
 ├── web/
 │   ├── src/
 │   │   ├── db/               Dexie schema and note CRUD
+│   │   ├── features/
+│   │   │   └── notes/        editor, note list, autosave
 │   │   ├── i18n/             en.ts, sk.ts, bundled at build time
 │   │   ├── App.tsx           the one page
-│   │   ├── health.ts         reads /health; temporary, replaced by sync/
 │   │   ├── index.css         all of the styling
 │   │   └── main.tsx          entry point
 │   ├── eslint.config.js
@@ -48,6 +49,12 @@ where the component sees them like any other local change. The server
 writes to SQLite. Nothing skips a step: a component that wants server
 data waits for sync to put it in IndexedDB, and a handler that wants
 client data waits for sync to send it.
+
+CodeMirror owns the note body and reports every change to `useAutosave`,
+which debounces 500ms and also writes on unmount, on a note switch, and
+when the page is hidden, because mobile Safari cannot be trusted to fire
+`beforeunload`. Each write derives the title from the first line of the
+body and goes to IndexedDB through `db/notes.ts`, never to the network.
 
 ## Local schema
 
