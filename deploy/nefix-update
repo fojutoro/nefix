@@ -26,6 +26,19 @@ usage() {
   exit 2
 }
 
+# Only safe once old_target is set; armed on INT/TERM at that point.
+rollback() {
+  ln -sfn "$old_target" "$ROOT/current"
+  if systemctl restart "$SERVICE"; then
+    log "rollback successful"
+  else
+    log "rollback FAILED - manual intervention needed"
+  fi
+  if [[ -n "$backup_file" ]]; then
+    log "database backup available: $backup_file"
+  fi
+}
+
 trap 'die "failed at line $LINENO"' ERR
 
 # Parse flags
@@ -160,6 +173,7 @@ chown -R nefix:nefix "$ROOT/releases/$latest_version" || true
 
 # Record current symlink target for rollback, then repoint
 old_target=$(readlink "$ROOT/current") || old_target="none"
+trap 'log "interrupted, rolling back"; rollback; die "deployment aborted"' INT TERM
 log "updating symlink to $latest_version"
 ln -sfn "$ROOT/releases/$latest_version" "$ROOT/current"
 
@@ -177,6 +191,12 @@ for ((i = 0; i < HEALTH_TIMEOUT; i++)); do
       break
     fi
   fi
+  # A unit is briefly inactive while restarting, so this is only trustworthy
+  # after a few seconds. Bailing here keeps a dead process off the full timeout.
+  if ((i >= 3)) && ! systemctl is-active --quiet "$SERVICE"; then
+    log "service is not running, abandoning health wait"
+    break
+  fi
   sleep 1
 done
 
@@ -185,17 +205,13 @@ if ! health_json=$(curl -fsS --max-time 2 "$HEALTH_URL") ||
   ! printf '%s' "$health_json" |
     grep -q "\"version\":[[:space:]]*\"$latest_version\""; then
   log "service failed to start with $latest_version, rolling back"
-  ln -sfn "$old_target" "$ROOT/current"
-  if systemctl restart "$SERVICE"; then
-    log "rollback successful"
-  else
-    log "rollback FAILED - manual intervention needed"
-  fi
-  if [[ -n "$backup_file" ]]; then
-    log "database backup available: $backup_file"
-  fi
+  rollback
   die "deployment failed"
 fi
+
+# Past this point the new release is live and healthy, so an interrupt during
+# pruning must not undo it.
+trap - INT TERM
 
 # Prune old releases, keeping only KEEP newest
 log "pruning releases (keeping $KEEP newest)"

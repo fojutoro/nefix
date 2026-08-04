@@ -1,0 +1,31 @@
+[Unit]
+Description=nefix
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nefix
+Group=nefix
+WorkingDirectory=/opt/nefix/current
+ExecStart=/opt/nefix/current/nefix
+Environment=NEFIX_ADDR=127.0.0.1:8009
+# Not optional. ProtectSystem=strict makes the whole filesystem read-only
+# except ReadWritePaths, so a relative path resolves under WorkingDirectory
+# (/opt/nefix/current, read-only) and the process cannot create the database.
+# This is what broke the v0.2.0 deploy in production.
+Environment=NEFIX_DB=/opt/nefix/data/nefix.db
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/nefix/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
