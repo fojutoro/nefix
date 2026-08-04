@@ -1,41 +1,39 @@
+// Temporary proof page for the local notes store. Replaced by the editor
+// in the next step. Components read and write IndexedDB directly; that is
+// the rule, not an exception.
 import { useEffect, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { fetchHealth } from './health.ts'
+import { createNote, deleteNote, listNotes } from './db/notes.ts'
+import type { Note } from './db/schema.ts'
 
 export default function App() {
-  const { t, i18n } = useTranslation()
-  const [version, setVersion] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [notes, setNotes] = useState<Note[]>([])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    fetchHealth(controller.signal)
-      .then((health) => setVersion(health.version))
-      .catch(() => {
-        if (!controller.signal.aborted) setFailed(true)
-      })
-    return () => controller.abort()
-  }, [])
+  const refresh = () => void listNotes().then(setNotes)
 
-  const serverVersion =
-    version ?? (failed ? t('health.unavailable') : t('health.loading'))
+  useEffect(refresh, [])
 
   return (
     <main>
-      <h1>{t('app.title')}</h1>
-      <p>{t('app.tagline')}</p>
-      <dl>
-        <dt>{t('app.language')}</dt>
-        <dd>{i18n.language}</dd>
-        <dt>{t('health.label')}</dt>
-        <dd>{serverVersion}</dd>
-      </dl>
+      <h1>notes store</h1>
       <button
         type="button"
-        onClick={() => void i18n.changeLanguage(i18n.language === 'sk' ? 'en' : 'sk')}
+        onClick={() =>
+          void createNote({ title: `note ${notes.length + 1}` }).then(refresh)
+        }
       >
-        {t('app.switchLanguage')}
+        create
       </button>
+      <button type="button" onClick={refresh}>
+        list
+      </button>
+      <button
+        type="button"
+        disabled={notes.length === 0}
+        onClick={() => void deleteNote(notes[0]!.id).then(refresh)}
+      >
+        delete newest
+      </button>
+      <pre>{JSON.stringify(notes, null, 2)}</pre>
     </main>
   )
 }
