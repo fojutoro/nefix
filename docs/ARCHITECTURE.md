@@ -16,16 +16,27 @@ nefix/
 │   └── go.mod
 ├── web/
 │   ├── src/
-│   │   ├── components/       never call the API
-│   │   ├── db/               Dexie schema and queries
-│   │   └── sync/             the only code that knows the server exists
+│   │   ├── i18n/             en.ts, sk.ts, bundled at build time
+│   │   ├── App.tsx           the one page
+│   │   ├── health.ts         reads /health; temporary, replaced by sync/
+│   │   ├── index.css         all of the styling
+│   │   └── main.tsx          entry point
+│   ├── eslint.config.js
 │   ├── index.html
-│   └── package.json
+│   ├── package.json
+│   └── vite.config.ts
 └── docs/
     ├── ARCHITECTURE.md
     ├── API.md
     └── decisions/
 ```
+
+## Development
+
+Development runs two processes: the Vite dev server on 5173 and the Go server
+on 8080, started by `make web-dev` and `make dev`. Vite proxies `/api` and
+`/health` to `127.0.0.1:8080` so the browser sees one origin, which is what
+lets session cookies work without any CORS handling on the server.
 
 ## Data flow
 
