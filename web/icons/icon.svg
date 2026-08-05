@@ -1,0 +1,15 @@
+<!--
+  Source for web/public/icon-*.png. Regenerate with:
+    rsvg-convert -w 192 -h 192 web/icons/icon.svg -o web/public/icon-192.png
+    rsvg-convert -w 512 -h 512 web/icons/icon.svg -o web/public/icon-512.png
+    cp web/public/icon-512.png web/public/icon-512-maskable.png
+
+  Full bleed and no rounded corners, with the wordmark inside the maskable
+  safe zone (the middle 80%), so the same artwork is valid for both the
+  `any` and the `maskable` purpose. A wordmark on a solid ground; this is
+  not the design pass.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#1b1b1f"/>
+  <text x="256" y="296" fill="#ffffff" font-family="Helvetica, Arial, sans-serif" font-size="110" font-weight="700" text-anchor="middle">nefix</text>
+</svg>

@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import App from './App.tsx'
-import { countNotes, listNotes } from './db/notes.ts'
+import { countNotes, createNote, listNotes } from './db/notes.ts'
 import { db } from './db/schema.ts'
 import i18n from './i18n/index.ts'
 
@@ -38,5 +38,28 @@ describe('App', () => {
     await screen.findByText('1 note')
     const row = screen.getByRole('button', { name: /^Untitled/ })
     expect(row.getAttribute('aria-current')).toBe('true')
+  })
+
+  it('finds a diacritic title from an unaccented query typed into the box', async () => {
+    await createNote({ title: 'Diskrétna matematika', bodyMd: '# množiny' })
+    await createNote({ title: 'Lineárna algebra', bodyMd: 'vektory' })
+    render(<App />)
+    await screen.findByText('2 notes')
+
+    const box = screen.getByRole('searchbox', { name: 'Search notes' })
+    fireEvent.change(box, { target: { value: 'diskretna' } })
+
+    await screen.findByText('1 match')
+    screen.getByRole('button', { name: /^Diskrétna matematika/ })
+    expect(screen.queryByRole('button', { name: /^Lineárna/ })).toBeNull()
+
+    fireEvent.change(box, { target: { value: 'diskretna fyzika' } })
+
+    await screen.findByText('No notes match your search.')
+    await screen.findByText('0 matches')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+
+    await screen.findByText('2 notes')
   })
 })
