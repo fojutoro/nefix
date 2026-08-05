@@ -15,14 +15,33 @@ type health struct {
 	Commit  string `json:"commit"`
 }
 
+type apiRoute struct {
+	Method  string
+	Pattern string
+	Handler http.Handler
+}
+
+// A list rather than a sequence of Handle calls, so a test can walk exactly
+// what the router was built from. A route added here is a route the cache
+// header test covers, with no second list to keep in step.
+func (s *server) apiRoutes() []apiRoute {
+	return []apiRoute{
+		{"POST", "/api/v1/register", http.HandlerFunc(s.register)},
+		{"POST", "/api/v1/login", http.HandlerFunc(s.login)},
+		{"POST", "/api/v1/logout", http.HandlerFunc(s.logout)},
+		{"GET", "/api/v1/me", requireUser(http.HandlerFunc(s.me))},
+		{"POST", "/api/v1/sync/push", requireUser(http.HandlerFunc(s.push))},
+		{"GET", "/api/v1/sync/pull", requireUser(http.HandlerFunc(s.pull))},
+	}
+}
+
 func New(version, commit string, db *store.DB, cfg CookieConfig) http.Handler {
 	srv := &server{db: db, cfg: cfg}
 
 	api := http.NewServeMux()
-	api.HandleFunc("POST /api/v1/register", srv.register)
-	api.HandleFunc("POST /api/v1/login", srv.login)
-	api.HandleFunc("POST /api/v1/logout", srv.logout)
-	api.Handle("GET /api/v1/me", requireUser(http.HandlerFunc(srv.me)))
+	for _, route := range srv.apiRoutes() {
+		api.Handle(route.Method+" "+route.Pattern, route.Handler)
+	}
 
 	mux := http.NewServeMux()
 
@@ -43,5 +62,5 @@ func New(version, commit string, db *store.DB, cfg CookieConfig) http.Handler {
 		mux.HandleFunc("GET /dev", devPage)
 	}
 
-	return mux
+	return noStore(mux)
 }
