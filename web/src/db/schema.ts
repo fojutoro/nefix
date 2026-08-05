@@ -8,7 +8,9 @@ export type Note = {
   classId: string | null
   title: string
   bodyMd: string
-  visibility: 'private' | 'public'
+  // `faculty` is readable by its author alone until users have a faculty,
+  // but the server already returns it, so the union has to admit it.
+  visibility: 'private' | 'faculty' | 'public'
   // ISO 8601 UTC. One representation everywhere, and it sorts lexically.
   createdAt: string
   updatedAt: string

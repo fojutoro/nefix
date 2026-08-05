@@ -56,6 +56,16 @@ when the page is hidden, because mobile Safari cannot be trusted to fire
 `beforeunload`. Each write derives the title from the first line of the
 body and goes to IndexedDB through `db/notes.ts`, never to the network.
 
+`sync/push.ts` drains every note with `dirty` set to `POST /api/v1/sync/push`
+in batches of 100, on mount, on `online`, on a 30-second timer and when the
+page is hidden — on a timer rather than on input, so a note is not sent once
+per keystroke. A push whose `version` is stale comes back `conflict` with the
+server's copy, and the client keeps both: the local note is copied to a fresh
+UUIDv7 with a translated `(older version)` suffix and stays dirty, while the
+original id is overwritten by the server's copy, clean. There is no dialog,
+no merge and no discard, which is what makes "a sync conflict becomes a fork"
+a rule the code can follow without ever asking the user a question.
+
 ## Local schema
 
 Search is diacritic-insensitive because a Slovak user types `diskretna`

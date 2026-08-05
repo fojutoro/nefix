@@ -252,8 +252,13 @@ func TestNotesWrittenInOneSecondStillPageOneAtATime(t *testing.T) {
 	if first.Seq == second.Seq {
 		t.Fatalf("both notes got seq %d", first.Seq)
 	}
-	if !first.CreatedAt.Equal(second.CreatedAt) {
-		t.Errorf("created_at differs (%v, %v) although updated_at did not", first.CreatedAt, second.CreatedAt)
+	// Consecutive, because nothing else was written between them. This is the
+	// assertion the loop above cannot make true by itself: it says the two
+	// notes are one cursor step apart, which is what lets the pull below
+	// separate them when their timestamps cannot.
+	if second.Seq != first.Seq+1 {
+		t.Errorf("seq %d and %d are not consecutive, although the two notes were written back to back",
+			first.Seq, second.Seq)
 	}
 
 	page := pullNotes(t, api, cookie, fmt.Sprintf("?since=%d", first.Seq))
@@ -366,8 +371,12 @@ func TestSyncRequiresASession(t *testing.T) {
 	}
 }
 
-// Walked from the same list the router registers, so a route added without a
-// cache header cannot exist.
+// Walked from the same list New registers from, so every route in that list
+// is covered. It does not prove more than that: a route registered by calling
+// api.Handle directly, outside apiRoutes, is invisible here and this test
+// stays green. What keeps the header on such a route is noStore matching the
+// /api/ path prefix rather than the route table, which
+// TestUnroutedAPIPathStillForbidsCaching covers.
 func TestEveryAPIRouteForbidsCaching(t *testing.T) {
 	srv, db := newServer(t)
 	api := New("v0.1.0", "abc1234", db, CookieConfig{})

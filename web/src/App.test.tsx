@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
 import { countNotes, createNote, listNotes } from './db/notes.ts'
 import { db } from './db/schema.ts'
@@ -20,9 +20,19 @@ describe('App', () => {
   beforeEach(async () => {
     await db.notes.clear()
     await i18n.changeLanguage('en')
+    // App drains the push queue on mount. Refusing the request keeps these
+    // tests off the network and leaves every note dirty, which is what the
+    // assertions below already expect.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    )
   })
 
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
 
   it('writes a row to IndexedDB when a note is created through the UI', async () => {
     render(<App />)
