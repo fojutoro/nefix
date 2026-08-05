@@ -336,7 +336,16 @@ func TestNotesSinceIncludesDeleted(t *testing.T) {
 	}
 }
 
-func TestUpsertNoteHandsOutDistinctSeqsConcurrently(t *testing.T) {
+// Eight goroutines, but SetMaxOpenConns(1) hands out the single connection to
+// one of them at a time, so the transactions run strictly in series and the
+// interleaving that produces a duplicate seq never occurs. This test cannot
+// observe that failure today. It is a guard for a future where the pool
+// grows, not evidence about the present, and it would not even be a good
+// guard: with one connection, a nextSeq that ran outside the caller's
+// transaction would block on the connection its own transaction holds and
+// hang rather than report a duplicate. What holds today is pinned by
+// TestNextSeqRollsBackWithItsTransaction.
+func TestUpsertNoteSeqsAreDistinctAcrossManyWriters(t *testing.T) {
 	db := openTemp(t)
 	ctx := context.Background()
 	user := createUser(t, db, "jozef", "jozef@example.sk")
