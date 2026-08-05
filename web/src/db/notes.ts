@@ -1,4 +1,4 @@
-import { db, type Note } from './schema.ts'
+import { db, searchTextOf, type Note } from './schema.ts'
 import { uuidv7 } from './uuid.ts'
 
 // Every mutation sets dirty: true. Phase 4's push queue reads that flag,
@@ -11,11 +11,14 @@ export async function createNote(input: {
   classId?: string | null
 }): Promise<Note> {
   const now = new Date().toISOString()
+  const title = input.title ?? ''
+  const bodyMd = input.bodyMd ?? ''
   const note: Note = {
     id: uuidv7(),
     classId: input.classId ?? null,
-    title: input.title ?? '',
-    bodyMd: input.bodyMd ?? '',
+    title,
+    bodyMd,
+    searchText: searchTextOf(title, bodyMd),
     visibility: 'private',
     createdAt: now,
     updatedAt: now,
@@ -56,6 +59,12 @@ export async function updateNote(
       // simply did not mention.
       ...(patch.title !== undefined && { title: patch.title }),
       ...(patch.bodyMd !== undefined && { bodyMd: patch.bodyMd }),
+      // Derived from the merged values, not from the patch: a body-only
+      // edit still has to keep the title in the search text.
+      searchText: searchTextOf(
+        patch.title ?? note.title,
+        patch.bodyMd ?? note.bodyMd,
+      ),
       updatedAt: new Date().toISOString(),
       dirty: true,
     })

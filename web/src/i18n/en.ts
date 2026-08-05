@@ -3,6 +3,12 @@ export const en = {
   'app.tagline': 'Offline-first study notes.',
   'app.language': 'Language',
   'app.switchLanguage': 'Switch to Slovak',
+  'app.offline': 'Offline. Notes are saved on this device.',
+  'search.label': 'Search notes',
+  'search.placeholder': 'Search',
+  'search.clear': 'Clear search',
+  'search.matches_one': '{{count}} match',
+  'search.matches_other': '{{count}} matches',
   'notes.listLabel': 'Notes',
   'notes.editorLabel': 'Note body, Markdown',
   'notes.create': 'New note',
@@ -13,4 +19,5 @@ export const en = {
   'notes.count_other': '{{count}} notes',
   'notes.emptyAll': 'No notes yet. Create one to start writing.',
   'notes.emptyNone': 'Select a note, or create one.',
+  'notes.emptySearch': 'No notes match your search.',
 }

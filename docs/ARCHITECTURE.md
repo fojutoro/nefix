@@ -58,11 +58,27 @@ body and goes to IndexedDB through `db/notes.ts`, never to the network.
 
 ## Local schema
 
+Search is diacritic-insensitive because a Slovak user types `diskretna`
+and expects `Diskrétna matematika`, so every note carries `searchText`, its
+title and body folded to unaccented lowercase, written by the same mutation
+that changes either and indexed in Dexie. Normalising at query time instead
+would mean re-normalising every note on every keystroke, which degrades as
+notes accumulate; matching is plain substring, ANDed across terms, with
+title matches ranked above body-only ones.
+
 `web/src/db/` holds one IndexedDB store, `notes`, keyed by a
 client-generated UUIDv7 string, so a note can be created offline and its
 ids sort by creation time. Deletes are soft: `deletedAt` is set and every
 read filters it out, because a removed row cannot be told apart from one
 that never existed.
+
+## Service worker
+
+`vite-plugin-pwa` generates a Workbox service worker that precaches the app
+shell and its assets, so the client loads with no network at all. Nothing
+under `/api/` is cached: it is `NetworkOnly` and excluded from the
+navigation fallback, because IndexedDB is the source of truth and a cached
+response would hand a client data older than what it already holds.
 
 ## Embedding the frontend
 

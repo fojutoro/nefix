@@ -17,6 +17,9 @@ const DIVISIONS: [Intl.RelativeTimeFormatUnit, number][] = [
 // clock would push a re-render every tick for a string that never changes.
 const currentMinute = () => Math.floor(Date.now() / 60_000) * 60_000
 
+// Lower than autosave's 500ms: this is a read, and it has to feel immediate.
+const SEARCH_DEBOUNCE_MS = 150
+
 function relative(iso: string, format: Intl.RelativeTimeFormat, now: number) {
   // A note's updatedAt is never in the future. A clock floored past it should
   // read as "now" rather than as a prediction.
@@ -30,6 +33,8 @@ function relative(iso: string, format: Intl.RelativeTimeFormat, now: number) {
 
 type Props = {
   notes: Note[]
+  query: string
+  onQueryChange: (query: string) => void
   selectedId: string | null
   onSelect: (id: string) => void
   onCreate: () => void
@@ -38,6 +43,8 @@ type Props = {
 
 export default function NoteList({
   notes,
+  query,
+  onQueryChange,
   selectedId,
   onSelect,
   onCreate,
@@ -49,6 +56,16 @@ export default function NoteList({
     [i18n.language],
   )
   const [now, setNow] = useState(currentMinute)
+  // The input keeps its own value so typing is never held up by the read.
+  const [text, setText] = useState(query)
+
+  useEffect(() => {
+    // Bailing out when the two already agree keeps the clear button, which
+    // commits immediately, from committing a second time on a timer.
+    if (text === query) return
+    const timer = setTimeout(() => onQueryChange(text), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [text, query, onQueryChange])
 
   useEffect(() => {
     // Returning the previous value when the minute has not rolled over lets
@@ -62,6 +79,10 @@ export default function NoteList({
     return () => clearInterval(timer)
   }, [])
 
+  // A query of nothing but spaces matches everything, so it is not a search
+  // and the list should not start reporting matches.
+  const searching = query.trim() !== ''
+
   return (
     <nav className="list" aria-label={t('notes.listLabel')}>
       <div className="list-head">
@@ -70,7 +91,36 @@ export default function NoteList({
           {t('notes.create')}
         </button>
       </div>
-      <p className="count">{t('notes.count', { count: notes.length })}</p>
+      <div className="search">
+        <input
+          type="search"
+          value={text}
+          aria-label={t('search.label')}
+          placeholder={t('search.placeholder')}
+          onChange={(event) => setText(event.target.value)}
+        />
+        {text !== '' && (
+          <button
+            type="button"
+            className="clear"
+            aria-label={t('search.clear')}
+            onClick={() => {
+              setText('')
+              onQueryChange('')
+            }}
+          >
+            &times;
+          </button>
+        )}
+      </div>
+      <p className="count">
+        {searching
+          ? t('search.matches', { count: notes.length })
+          : t('notes.count', { count: notes.length })}
+      </p>
+      {searching && notes.length === 0 && (
+        <p className="empty-list">{t('notes.emptySearch')}</p>
+      )}
       <ul>
         {notes.map((note) => {
           const title = note.title || t('notes.untitled')
