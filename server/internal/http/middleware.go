@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/fojutoro/nefix/server/internal/store"
@@ -76,6 +77,26 @@ func (s *server) slide(w http.ResponseWriter, r *http.Request, token string) {
 	}
 
 	setSessionCookie(w, token, extended, s.cfg)
+}
+
+// The client's service worker declares /api/ NetworkOnly, but a response
+// carrying no freshness directive can still be cached heuristically by the
+// browser's own HTTP cache underneath the worker, and by anything between the
+// client and the origin. Saying no-store binds all of them at once, and Vary
+// keeps a shared cache from serving one session's answer to another.
+//
+// Set on the way in, because a header written after the status line is
+// ignored. Wrapped outside the router, so an unrouted /api/ path answers 404
+// with the header too.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Vary", "Cookie")
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireUser must run after withUser.

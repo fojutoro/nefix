@@ -25,7 +25,7 @@ func openTemp(t *testing.T) *DB {
 func TestOpenCreatesSchema(t *testing.T) {
 	db := openTemp(t)
 
-	for _, table := range []string{"institutions", "faculties", "schema_migrations"} {
+	for _, table := range []string{"institutions", "faculties", "notes", "schema_migrations"} {
 		t.Run(table, func(t *testing.T) {
 			var name string
 			err := db.QueryRow(

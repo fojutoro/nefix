@@ -62,7 +62,13 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return decodeBodyLimit(w, r, dst, maxBodyBytes)
+}
+
+// Sync pushes a batch and needs a ceiling of its own; everything else stays
+// at 8 KB.
+func decodeBodyLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
