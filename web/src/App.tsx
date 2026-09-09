@@ -9,6 +9,15 @@ import { useAutosave } from './features/notes/useAutosave.ts'
 import { sync as runSync } from './sync/index.ts'
 import { useSyncState } from './sync/state.ts'
 
+// Ten seconds is short enough that a second window catches up before anyone
+// wonders whether it will, and the cycle is one request when nothing changed.
+const INTERVAL_MS = 10_000
+
+// `focus` and `visibilitychange` both fire on a window switch, and the
+// interval can land on top of them. sync()'s guard stops two runs overlapping
+// but not the second pointless round trip.
+const DEBOUNCE_MS = 2_000
+
 // Coarse on purpose: the line re-renders when a sync ends, not on a timer, so
 // a minute is the finest unit it can keep honest.
 function relative(at: number, language: string): string {
@@ -32,8 +41,8 @@ export default function App() {
   const refresh = useCallback(() => searchNotes(query).then(setNotes), [query])
 
   // Held in a ref so the sync effect below keeps stable dependencies. Reading
-  // `refresh` directly would restart the 30-second timer on every keystroke
-  // in the search box.
+  // `refresh` directly would restart the sync timer on every keystroke in the
+  // search box.
   const refreshRef = useRef(refresh)
   useEffect(() => {
     refreshRef.current = refresh
@@ -56,31 +65,53 @@ export default function App() {
     }
   }, [])
 
-  // The cycle runs on a timer, never on input: pushing per keystroke would
-  // send a note once per character and conflict it against itself.
+  // The cycle runs on a timer and on the events that mean the user is looking
+  // at this window again, never on input: syncing per keystroke would send a
+  // note once per character and conflict it against itself.
   useEffect(() => {
-    const drain = () =>
+    let last = 0
+    let timer: ReturnType<typeof setInterval> | undefined
+
+    const drain = () => {
+      const now = Date.now()
+      if (now - last < DEBOUNCE_MS) return
+      last = now
       void runSync().then((summary) => {
         // A pull that lands notes the list never shows is, to the user, a
         // pull that did not happen.
         if (summary.changed) return refreshRef.current()
       })
-    drain()
-    const timer = setInterval(() => {
-      if (navigator.onLine) drain()
-    }, 30_000)
-    // Hidden, not unloaded. Mobile Safari can kill a backgrounded tab without
-    // ever firing beforeunload, which is the same reason useAutosave listens
-    // here.
-    const onHidden = () => {
-      if (document.visibilityState === 'hidden') drain()
     }
+
+    const stop = () => clearInterval(timer)
+    const start = () => {
+      timer = setInterval(() => {
+        if (navigator.onLine) drain()
+      }, INTERVAL_MS)
+    }
+
+    const onVisibility = () => {
+      stop()
+      // A hidden tab polling every ten seconds is wasted battery on a phone,
+      // and the browser throttles its timers anyway, so the interval exists
+      // only while the tab is visible. Becoming visible is what lets a second
+      // window catch up at once instead of waiting out a throttled interval;
+      // becoming hidden flushes, because mobile Safari can kill a
+      // backgrounded tab without ever firing beforeunload.
+      if (document.visibilityState === 'visible') start()
+      drain()
+    }
+
+    drain()
+    if (document.visibilityState === 'visible') start()
     window.addEventListener('online', drain)
-    document.addEventListener('visibilitychange', onHidden)
+    window.addEventListener('focus', drain)
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
-      clearInterval(timer)
+      stop()
       window.removeEventListener('online', drain)
-      document.removeEventListener('visibilitychange', onHidden)
+      window.removeEventListener('focus', drain)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [])
 

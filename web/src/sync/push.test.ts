@@ -219,4 +219,31 @@ describe('pushDirtyNotes', () => {
 
     expect(batches).toHaveLength(1)
   })
+
+  it('releases the guard when a subscriber throws on the first notification', async () => {
+    const note = await createNote({ title: 'algebra' })
+    const batches = serve(accept)
+
+    // The status is published before a single note is sent, so a subscriber
+    // throwing there is the earliest thing that can go wrong. Whether the run
+    // rejects or swallows it is not the point: the guard has to come back, or
+    // the queue never drains again and nothing ever says why.
+    let poisoned = true
+    const unsubscribe = syncState.subscribe(() => {
+      if (poisoned) {
+        poisoned = false
+        throw new Error('a subscriber blew up')
+      }
+    })
+    await pushDirtyNotes().catch(() => undefined)
+    unsubscribe()
+
+    batches.length = 0
+    await pushDirtyNotes()
+
+    // A request, not a resolved promise: a stranded guard returns the empty
+    // summary quite happily and sends nothing.
+    expect(batches).toHaveLength(1)
+    expect(batches[0]!.map((sent) => sent.id)).toEqual([note.id])
+  })
 })
