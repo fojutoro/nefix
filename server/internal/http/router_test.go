@@ -10,7 +10,7 @@ import (
 
 func TestHealth(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New("v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	New(t.Context(), "v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	res := rec.Result()
 	defer res.Body.Close()
@@ -34,7 +34,7 @@ func TestHealth(t *testing.T) {
 
 func TestHealthRejectsPost(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New("v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
+	New(t.Context(), "v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
@@ -48,7 +48,7 @@ func TestHealthRejectsPost(t *testing.T) {
 // what this test is about — that the API did not claim it, is.
 func TestUnknownPathGoesToTheFrontend(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New("v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/unknown_path", nil))
+	New(t.Context(), "v0.1.0", "abc1234", nil, CookieConfig{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/unknown_path", nil))
 
 	if rec.Code == http.StatusNotFound {
 		t.Errorf("status = %d, want the path handed to the frontend", rec.Code)
@@ -61,7 +61,7 @@ func TestUnknownPathGoesToTheFrontend(t *testing.T) {
 // The frontend is a catch-all, and a catch-all that swallowed /health would
 // take the deploy's only health signal with it.
 func TestFrontendDoesNotShadowTheAPI(t *testing.T) {
-	handler := New("v0.1.0", "abc1234", nil, CookieConfig{})
+	handler := New(t.Context(), "v0.1.0", "abc1234", nil, CookieConfig{})
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))

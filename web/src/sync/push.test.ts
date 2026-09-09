@@ -47,7 +47,12 @@ const accept = (sent: PushNote[]): PushResult[] =>
     note: { ...note, version: note.version + 1, seq: 7, created_at: 'c', updated_at: '2026-08-05T12:00:00.000Z' },
   }))
 
+// A signed-in browser holds the readable half of the pair, and every
+// non-GET request refuses to leave without it.
+const CSRF_FIXTURE = 'nefix_csrf=Zm9yLXRlc3Rz'
+
 beforeEach(async () => {
+  document.cookie = CSRF_FIXTURE
   await db.notes.clear()
   await i18n.changeLanguage('en')
   syncState.setState({
@@ -245,5 +250,25 @@ describe('pushDirtyNotes', () => {
     // summary quite happily and sends nothing.
     expect(batches).toHaveLength(1)
     expect(batches[0]!.map((sent) => sent.id)).toEqual([note.id])
+  })
+})
+
+describe('the CSRF guard', () => {
+  it('refuses to send a write when the cookie cannot be read', async () => {
+    // What a browser that has never signed in looks like, or one whose
+    // readable cookie expired under it.
+    document.cookie = 'nefix_csrf=; max-age=0'
+    const calls = serve(accept)
+    await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
+
+    const summary = await pushDirtyNotes()
+
+    // Nothing went out. A request sent without the header comes back 403 and
+    // reads like a server fault instead of a missing cookie.
+    expect(calls).toHaveLength(0)
+    expect(summary.failed).toBe(1)
+    expect(syncState.current.status).toBe('error')
+    // Still dirty, so the note is sent once signing in restores the cookie.
+    expect(await db.notes.filter((note) => note.dirty).count()).toBe(1)
   })
 })

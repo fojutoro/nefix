@@ -38,7 +38,12 @@ function record(): string[] {
   return calls
 }
 
+// A signed-in browser holds the readable half of the pair, and every
+// non-GET request refuses to leave without it.
+const CSRF_FIXTURE = 'nefix_csrf=Zm9yLXRlc3Rz'
+
 beforeEach(async () => {
+  document.cookie = CSRF_FIXTURE
   await db.notes.clear()
   await db.meta.clear()
   await i18n.changeLanguage('en')

@@ -28,6 +28,49 @@ so reads stay reads.
 it. Every other endpoint accepts it and never sets it, apart from the
 sliding refresh above.
 
+## CSRF
+
+`SameSite=Lax` blocks the realistic cross-site POST, but it is one layer
+and does not cover every browser or every navigation, so there is a
+second.
+
+Register and login set a second cookie, `nefix_csrf`, alongside the
+session, with the same `SameSite`, `Path` and `Secure` attributes. It is
+**not** `HttpOnly`: the client reads it and echoes it back, which is the
+one thing a cross-site request cannot do.
+
+Every state-changing request — `POST`, `PUT`, `PATCH`, `DELETE` — must
+carry that value in an `X-CSRF-Token` header. A request whose header is
+missing or does not match the session is 403. `GET` and `HEAD` are never
+checked.
+
+`POST /register` and `POST /login` are exempt. They run before there is a
+session, so there is nothing to protect, and requiring a token would make
+the first request of a browser's life impossible. `POST /logout` is not
+exempt. A request carrying no valid session is not checked either, for
+the same reason the two exempt endpoints are not, which is what keeps
+logout idempotent for a caller with no cookie.
+
+The token is derived from the session token and never stored, so a leaked
+database yields neither half. The cookie is re-set on any authenticated
+request that arrives without it, so a session that predates this scheme
+keeps working rather than being logged out.
+
+## Rate limiting
+
+`POST /register` and `POST /login` are limited to 10 requests per minute
+per client, from a bucket that holds 10. No other endpoint is limited.
+The ceiling is low because each attempt runs argon2, which costs about
+70ms and allocates 64 MiB: a few dozen at once is a memory problem before
+it is a credential one.
+
+Over the limit is 429 with `Retry-After` in whole seconds.
+
+The client is the leftmost `X-Forwarded-For` entry when the request
+arrives from loopback, where nginx sits, and the peer address otherwise.
+The header is client-supplied, so trusting it from anywhere else would let
+anyone mint a fresh bucket per request.
+
 ## Request bodies
 
 JSON, at most 8 KB, except `POST /api/v1/sync/push`, which carries a
@@ -116,6 +159,7 @@ Registration signs you in: the response sets the session cookie.
 | 400 | error | a validation rule failed; the message names which |
 | 409 | error | `username or email already taken` |
 | 413 | error | body over 8 KB |
+| 429 | error | over the rate limit; `Retry-After` in seconds |
 | 500 | error | hashing, the database, or the session failed |
 
 The 409 never says which of the two collided. Saying so would confirm
@@ -133,6 +177,7 @@ whether an address is registered.
 | 400 | error | malformed body |
 | 401 | error | `wrong email or password` |
 | 413 | error | body over 8 KB |
+| 429 | error | over the rate limit; `Retry-After` in seconds |
 | 500 | error | the database or the session failed |
 
 An unknown address and a wrong password return the same status and the
@@ -146,14 +191,18 @@ request, since the password was already correct.
 
 ### POST /api/v1/logout
 
-No request body. Deletes the session and clears the cookie.
+No request body. Deletes the session and clears both cookies.
 
 | Status | Body | When |
 |--------|------|------|
-| 204 | none | always |
+| 204 | none | no session, or a session with a matching `X-CSRF-Token` |
+| 403 | error | a valid session without a matching `X-CSRF-Token` |
 
-Idempotent. Logging out with no cookie, an expired session or a garbage
-token is still 204: there is no state in which logging out fails.
+Idempotent for a caller with no session: logging out with no cookie, an
+expired session or a garbage token is still 204, because there is nothing
+to protect and no state in which that logout can fail. A caller that does
+hold a session is making a state-changing request like any other and needs
+the header.
 
 ### GET /api/v1/me
 
@@ -256,6 +305,7 @@ learns only that it may not write there.
 | 200 | results | the batch was processed, whatever each note's outcome |
 | 400 | error | a note is malformed: a bad id, an unknown `visibility`, a title over 200 characters, a negative `version`, or a `deleted_at` that is not RFC 3339. Nothing is written; the message names the note |
 | 401 | error | `authentication required` |
+| 403 | error | missing or invalid `X-CSRF-Token` |
 | 413 | error | over 100 notes or over 1 MB |
 | 500 | error | the database failed |
 

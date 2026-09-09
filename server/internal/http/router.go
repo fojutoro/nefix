@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -26,10 +27,12 @@ type apiRoute struct {
 // A list rather than a sequence of Handle calls, so a test can walk exactly
 // what the router was built from. A route added here is a route the cache
 // header test covers, with no second list to keep in step.
-func (s *server) apiRoutes() []apiRoute {
+func (s *server) apiRoutes(limit *limiter) []apiRoute {
 	return []apiRoute{
-		{"POST", "/api/v1/register", http.HandlerFunc(s.register)},
-		{"POST", "/api/v1/login", http.HandlerFunc(s.login)},
+		// The only two rate limited: they are the only two that run argon2
+		// for an unauthenticated caller.
+		{"POST", "/api/v1/register", limit.limit(http.HandlerFunc(s.register))},
+		{"POST", "/api/v1/login", limit.limit(http.HandlerFunc(s.login))},
 		{"POST", "/api/v1/logout", http.HandlerFunc(s.logout)},
 		{"GET", "/api/v1/me", requireUser(http.HandlerFunc(s.me))},
 		{"POST", "/api/v1/sync/push", requireUser(http.HandlerFunc(s.push))},
@@ -37,11 +40,17 @@ func (s *server) apiRoutes() []apiRoute {
 	}
 }
 
-func New(version, commit string, db *store.DB, cfg CookieConfig) http.Handler {
+// The context bounds the rate limiter's sweep goroutine: it is what stops
+// the server leaving one behind on shutdown, and what keeps a test from
+// leaving one per call.
+func New(ctx context.Context, version, commit string, db *store.DB, cfg CookieConfig) http.Handler {
 	srv := &server{db: db, cfg: cfg}
 
+	limit := newLimiter(loginRate, loginBurst, bucketIdle)
+	limit.run(ctx, sweepEvery)
+
 	api := http.NewServeMux()
-	for _, route := range srv.apiRoutes() {
+	for _, route := range srv.apiRoutes(limit) {
 		api.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 
@@ -57,7 +66,11 @@ func New(version, commit string, db *store.DB, cfg CookieConfig) http.Handler {
 		})
 	})
 
-	mux.Handle("/api/v1/", srv.withUser(api))
+	// requireCSRF inside withUser, because it needs to know whether the
+	// request carries a session before it decides there is anything to
+	// protect. Wrapping the whole mux rather than each route: a route added
+	// to the list above is covered without anyone remembering to do it.
+	mux.Handle("/api/v1/", srv.withUser(srv.requireCSRF(api)))
 
 	devEnabled := os.Getenv("NEFIX_DEV_PAGE") == "true"
 	if devEnabled {

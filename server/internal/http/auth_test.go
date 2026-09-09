@@ -24,7 +24,7 @@ func newAPI(t *testing.T) http.Handler {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	return New("v0.1.0", "abc1234", db, CookieConfig{})
+	return New(t.Context(), "v0.1.0", "abc1234", db, CookieConfig{})
 }
 
 func call(t *testing.T, h http.Handler, method, path string, body any, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -47,6 +47,12 @@ func call(t *testing.T, h http.Handler, method, path string, body any, cookies .
 	req := httptest.NewRequest(method, path, reader)
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
+		// What the real client does on every request it can: derive the
+		// header from the session it holds. A test that wants to see the
+		// header missing has to build its own request.
+		if cookie.Name == sessionCookieName {
+			req.Header.Set(csrfHeaderName, csrfTokenFor(cookie.Value))
+		}
 	}
 
 	rec := httptest.NewRecorder()
