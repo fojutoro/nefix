@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { createNote, deleteNote, updateNote } from './db/notes.ts'
+import {
+  createNote,
+  deleteNote,
+  readLastNoteId,
+  updateNote,
+  writeLastNoteId,
+} from './db/notes.ts'
 import type { Note } from './db/schema.ts'
 import Editor from './features/notes/Editor.tsx'
 import NoteList from './features/notes/NoteList.tsx'
@@ -37,6 +43,23 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [online, setOnline] = useState(() => navigator.onLine)
   const sync = useSyncState()
+
+  // Nothing is remembered until the stored id has been read back, so the
+  // mount-time write of `null` cannot erase it before the read returns.
+  const restored = useRef(false)
+
+  useEffect(() => {
+    void readLastNoteId().then((id) => {
+      restored.current = true
+      // Only if nothing has been picked meanwhile: a restore has no business
+      // pulling the user off a note they just opened.
+      setSelectedId((current) => current ?? id)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (restored.current) void writeLastNoteId(selectedId)
+  }, [selectedId])
 
   const refresh = useCallback(() => searchNotes(query).then(setNotes), [query])
 

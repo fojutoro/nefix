@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
-import { countNotes, createNote, listNotes } from './db/notes.ts'
+import { countNotes, createNote, deleteNote, listNotes } from './db/notes.ts'
 import { db } from './db/schema.ts'
 import i18n from './i18n/index.ts'
 import { sync } from './sync/index.ts'
@@ -46,6 +46,7 @@ window.ResizeObserver ??= NoopResizeObserver
 describe('App', () => {
   beforeEach(async () => {
     await db.notes.clear()
+    await db.meta.clear()
     await i18n.changeLanguage('en')
     // sync is mocked for the whole file, so nothing here reaches the network
     // and every note stays dirty, which is what the assertions below expect.
@@ -75,6 +76,10 @@ describe('App', () => {
     await screen.findByText('1 note')
     const row = screen.getByRole('button', { name: /^Untitled/ })
     expect(row.getAttribute('aria-current')).toBe('true')
+    // Selecting it remembers it, which is what a reload reads back.
+    await waitFor(async () =>
+      expect((await db.meta.get('lastNoteId'))?.value).toBe(note!.id),
+    )
   })
 
   it('finds a diacritic title from an unaccented query typed into the box', async () => {
@@ -104,6 +109,7 @@ describe('App', () => {
 describe('App sync triggers', () => {
   beforeEach(async () => {
     await db.notes.clear()
+    await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(sync).mockReset()
     vi.mocked(sync).mockImplementation(idle)
@@ -170,5 +176,63 @@ describe('App sync triggers', () => {
     await settle()
 
     expect(sync).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('App remembering the open note', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await db.meta.clear()
+    await i18n.changeLanguage('en')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    )
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  it('reopens the note that was open when the page was last closed', async () => {
+    await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
+    const wanted = await createNote({
+      title: 'Lineárna algebra',
+      bodyMd: 'vektory',
+    })
+    await db.meta.put({ key: 'lastNoteId', value: wanted.id })
+
+    render(<App />)
+
+    const row = await screen.findByRole('button', { name: /^Lineárna algebra/ })
+    await waitFor(() => expect(row.getAttribute('aria-current')).toBe('true'))
+    // The editor is open on it, not merely the row highlighted.
+    screen.getByText('vektory')
+    expect(
+      screen.getByRole('button', { name: /^Diskrétna/ }).getAttribute('aria-current'),
+    ).toBe('false')
+  })
+
+  it('falls back to the empty state when the remembered note was deleted', async () => {
+    const note = await createNote({ title: 'Zmazaná', bodyMd: 'text' })
+    await deleteNote(note.id)
+    await db.meta.put({ key: 'lastNoteId', value: note.id })
+
+    render(<App />)
+
+    await screen.findByText('No notes yet. Create one to start writing.')
+  })
+
+  it('falls back to the empty state when the remembered id is not in the database', async () => {
+    await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
+    await db.meta.put({ key: 'lastNoteId', value: 'no-such-note' })
+
+    render(<App />)
+
+    await screen.findByText('Select a note, or create one.')
+    expect(
+      screen.getByRole('button', { name: /^Diskrétna/ }).getAttribute('aria-current'),
+    ).toBe('false')
   })
 })
