@@ -54,17 +54,17 @@ func main() {
 		logger.Warn("secure cookies disabled, development only", "env", "NEFIX_SECURE_COOKIES=false")
 	}
 
+	// Listen for Ctrl+C or termination signals; stop() cleans up listeners.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	srv := &http.Server{
-		Handler:           nefixhttp.New(version, commit, db, nefixhttp.CookieConfig{Secure: secureCookies}),
+		Handler:           nefixhttp.New(ctx, version, commit, db, nefixhttp.CookieConfig{Secure: secureCookies}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	// Listen for Ctrl+C or termination signals; stop() cleans up listeners.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

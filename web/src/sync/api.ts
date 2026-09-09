@@ -70,16 +70,49 @@ export type PullResponse = {
   has_more: boolean
 }
 
+const CSRF_COOKIE = 'nefix_csrf'
+const CSRF_HEADER = 'X-CSRF-Token'
+
+// The server sets this one without HttpOnly precisely so it can be read here
+// and echoed back in a header, which is what a cross-site request cannot do.
+function csrfToken(): string | null {
+  for (const pair of document.cookie.split(';')) {
+    const [name, ...rest] = pair.trim().split('=')
+    if (name === CSRF_COOKIE) return decodeURIComponent(rest.join('='))
+  }
+
+  return null
+}
+
 export async function send(
   path: string,
   init?: RequestInit,
+  // Login and register only: they run before there is a session, so there is
+  // no token to send and the server does not ask for one. Everything else
+  // defaults to sending it, so an endpoint added later is covered without
+  // anyone having to remember.
+  anonymous = false,
 ): Promise<unknown> {
+  const method = init?.method ?? 'GET'
+  const headers = new Headers(init?.headers)
+
+  if (!anonymous && method !== 'GET' && method !== 'HEAD') {
+    const token = csrfToken()
+    // Loudly, and before the request goes out. Sending it without the header
+    // produces a 403 that reads like a server fault rather than what it is,
+    // which is this client having no readable session.
+    if (token === null) {
+      throw new Error(`${path}: no CSRF cookie, so this request cannot be sent`)
+    }
+    headers.set(CSRF_HEADER, token)
+  }
+
   let response: Response
   // Only the transport is guarded. fetch rejects when the request never
   // arrived; every HTTP status resolves, so a 500 read as "offline" would
   // have the UI blame the network for the server.
   try {
-    response = await fetch(path, { credentials: 'include', ...init })
+    response = await fetch(path, { credentials: 'include', ...init, headers })
   } catch (error) {
     throw new OfflineError(
       error instanceof Error ? error.message : 'network unreachable',

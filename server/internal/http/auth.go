@@ -225,6 +225,10 @@ func (s *server) startSession(w http.ResponseWriter, r *http.Request, user *stor
 		return false
 	}
 	setSessionCookie(w, token, expiresAt, s.cfg)
+	// The readable half, derived from the token that just went into the
+	// HttpOnly one. Both are set together or the client has no way to make a
+	// state-changing request.
+	setCSRFCookie(w, token, expiresAt, s.cfg)
 
 	return true
 }
@@ -238,6 +242,8 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clearSessionCookie(w, s.cfg)
+	// Or the browser keeps a readable token for a session that is gone.
+	clearCSRFCookie(w, s.cfg)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -379,9 +379,9 @@ func TestSyncRequiresASession(t *testing.T) {
 // TestUnroutedAPIPathStillForbidsCaching covers.
 func TestEveryAPIRouteForbidsCaching(t *testing.T) {
 	srv, db := newServer(t)
-	api := New("v0.1.0", "abc1234", db, CookieConfig{})
+	api := New(t.Context(), "v0.1.0", "abc1234", db, CookieConfig{})
 
-	for _, route := range srv.apiRoutes() {
+	for _, route := range srv.apiRoutes(newLimiter(loginRate, loginBurst, bucketIdle)) {
 		t.Run(route.Method+" "+route.Pattern, func(t *testing.T) {
 			// The status does not matter. A 401 or a 400 must carry the
 			// header as surely as a 200 does.

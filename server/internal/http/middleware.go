@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -55,6 +56,16 @@ func (s *server) withUser(next http.Handler) http.Handler {
 
 		s.slide(w, r, cookie.Value)
 
+		// A session from before this cookie existed, or one whose readable
+		// half the browser dropped. Minted here rather than forcing a fresh
+		// login: the value is derived, so it can be handed out again at any
+		// time, and an existing session heals on its next request.
+		if csrf, err := r.Cookie(csrfCookieName); err != nil || csrf.Value != csrfTokenFor(cookie.Value) {
+			if expiresAt, err := s.db.SessionExpiresAt(r.Context(), cookie.Value); err == nil {
+				setCSRFCookie(w, cookie.Value, expiresAt, s.cfg)
+			}
+		}
+
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, user)))
 	})
 }
@@ -93,6 +104,63 @@ func noStore(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("Vary", "Cookie")
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+const csrfHeaderName = "X-CSRF-Token"
+
+// Exempt because there is no session to protect yet. Demanding a token here
+// would also make the first request of a browser's life impossible, and would
+// lock out anyone holding a session cookie whose readable half went missing.
+var csrfExempt = map[string]bool{
+	"/api/v1/login":    true,
+	"/api/v1/register": true,
+}
+
+// requireCSRF must run after withUser, which is what decides whether there is
+// a session at all.
+func (s *server) requireCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		if csrfExempt[r.URL.Path] {
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		// No session is no authenticated state to forge a request against,
+		// which is the same reason login and register are exempt. It is also
+		// what keeps logout idempotent for a caller with no cookie at all.
+		if _, ok := userFrom(r.Context()); !ok {
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		cookie, err := r.Cookie(sessionCookieName)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
+
+			return
+		}
+
+		// Against the value derived from the session, not against the cookie:
+		// the cookie is only how the client was told what to send, and a
+		// comparison of the two halves the client controls proves nothing.
+		want := []byte(csrfTokenFor(cookie.Value))
+		if subtle.ConstantTimeCompare(want, []byte(r.Header.Get(csrfHeaderName))) != 1 {
+			writeError(w, http.StatusForbidden, "missing or invalid CSRF token")
+
+			return
 		}
 
 		next.ServeHTTP(w, r)

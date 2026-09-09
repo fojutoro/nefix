@@ -17,7 +17,7 @@ const posting = (body: unknown): RequestInit => ({
 })
 
 export async function login(email: string, password: string): Promise<User> {
-  return (await send('/api/v1/login', posting({ email, password }))) as User
+  return (await send('/api/v1/login', posting({ email, password }), true)) as User
 }
 
 export async function register(input: {
@@ -36,6 +36,7 @@ export async function register(input: {
       email: input.email,
       password: input.password,
     }),
+    true,
   )) as User
 }
 

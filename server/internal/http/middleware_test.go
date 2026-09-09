@@ -138,9 +138,17 @@ func TestWithUserSlidingExpiry(t *testing.T) {
 				t.Fatal("no user in the context")
 			}
 
-			cookies := rec.Result().Cookies()
-			if got := len(cookies) > 0; got != tt.wantSet {
-				t.Errorf("cookie re-set = %v, want %v", got, tt.wantSet)
+			// By name: the response also carries the readable CSRF cookie,
+			// which is minted whenever it is missing and says nothing about
+			// whether the session itself was refreshed.
+			var resent bool
+			for _, cookie := range rec.Result().Cookies() {
+				if cookie.Name == sessionCookieName {
+					resent = true
+				}
+			}
+			if resent != tt.wantSet {
+				t.Errorf("session cookie re-set = %v, want %v", resent, tt.wantSet)
 			}
 
 			after, err := db.SessionExpiresAt(context.Background(), token)
@@ -209,5 +217,148 @@ func TestClearSessionCookieMatchesSetAttributes(t *testing.T) {
 	}
 	if after.MaxAge != -1 {
 		t.Errorf("MaxAge = %d, want -1", after.MaxAge)
+	}
+}
+
+// Registration is what hands out both halves, so it doubles as the fixture.
+// It sends no CSRF header itself, which is also the exemption under test.
+func signedIn(t *testing.T, api http.Handler) (*http.Cookie, *http.Cookie) {
+	t.Helper()
+
+	rec := call(t, api, http.MethodPost, "/api/v1/register", registerBody("jozef", "jozef@example.sk"))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body)
+	}
+
+	var session, csrf *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		switch cookie.Name {
+		case sessionCookieName:
+			session = cookie
+		case csrfCookieName:
+			csrf = cookie
+		}
+	}
+	if session == nil {
+		t.Fatal("register set no session cookie")
+	}
+	if csrf == nil {
+		t.Fatal("register set no CSRF cookie")
+	}
+
+	return session, csrf
+}
+
+func post(t *testing.T, h http.Handler, path, token string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+	if token != "" {
+		req.Header.Set(csrfHeaderName, token)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	return rec
+}
+
+func TestLogoutWithoutTheCSRFHeaderIsForbidden(t *testing.T) {
+	api := newAPI(t)
+	session, _ := signedIn(t, api)
+
+	rec := post(t, api, "/api/v1/logout", "", session)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestCSRFHeaderThatDoesNotMatchIsForbidden(t *testing.T) {
+	api := newAPI(t)
+	session, csrf := signedIn(t, api)
+
+	rec := post(t, api, "/api/v1/logout", csrf.Value[:len(csrf.Value)-1]+"x", session)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestCSRFHeaderMatchingTheSessionSucceeds(t *testing.T) {
+	api := newAPI(t)
+	session, csrf := signedIn(t, api)
+
+	rec := post(t, api, "/api/v1/logout", csrf.Value, session)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want %d: %s", rec.Code, http.StatusNoContent, rec.Body)
+	}
+}
+
+// Both halves are cleared, or the browser keeps a readable token for a session
+// that no longer exists.
+func TestLogoutClearsBothCookies(t *testing.T) {
+	api := newAPI(t)
+	session, csrf := signedIn(t, api)
+
+	rec := post(t, api, "/api/v1/logout", csrf.Value, session)
+
+	cleared := map[string]bool{}
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.MaxAge < 0 {
+			cleared[cookie.Name] = true
+		}
+	}
+	for _, name := range []string{sessionCookieName, csrfCookieName} {
+		if !cleared[name] {
+			t.Errorf("%s was not cleared", name)
+		}
+	}
+}
+
+// The first request of a browser's life has no token to send, so requiring one
+// here would make signing in impossible.
+func TestLoginNeedsNoCSRFToken(t *testing.T) {
+	api := newAPI(t)
+	signedIn(t, api)
+
+	rec := call(t, api, http.MethodPost, "/api/v1/login", map[string]string{
+		"email":    "jozef@example.sk",
+		"password": goodPassword,
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body)
+	}
+}
+
+func TestGETNeedsNoCSRFToken(t *testing.T) {
+	api := newAPI(t)
+	session, _ := signedIn(t, api)
+
+	rec := call(t, api, http.MethodGet, "/api/v1/me", nil, session)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body)
+	}
+}
+
+// The client has to read it to echo it back, which is the whole mechanism.
+func TestCSRFCookieIsReadableByTheClient(t *testing.T) {
+	api := newAPI(t)
+	_, csrf := signedIn(t, api)
+
+	if csrf.HttpOnly {
+		t.Error("the CSRF cookie is HttpOnly, so the client cannot send the header")
+	}
+	if csrf.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want %v", csrf.SameSite, http.SameSiteLaxMode)
+	}
+	if csrf.Path != "/" {
+		t.Errorf("Path = %q, want %q", csrf.Path, "/")
 	}
 }
