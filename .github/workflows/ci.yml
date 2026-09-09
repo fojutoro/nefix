@@ -22,6 +22,16 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: server/go.mod
+          # Without this it looks for go.sum at the repo root, finds
+          # nothing, and silently caches neither modules nor build output.
+          cache-dependency-path: server/go.sum
+      # make go-lint installs staticcheck with `go install`, which compiles
+      # it from source and costs ~50s of the ~58s this job spends linting.
+      # The key must match STATICCHECK_VERSION in the Makefile — bump both.
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: staticcheck-${{ runner.os }}-v0.7.0
       - run: make go-lint
       - run: make go-test
       - run: make build
@@ -35,7 +45,16 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: make web-install
+      # setup-node's cache holds the npm download cache, so `npm ci` still
+      # unpacks and links every package. Caching node_modules itself skips
+      # the install entirely on a hit.
+      - uses: actions/cache@v4
+        id: node-modules
+        with:
+          path: web/node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+      - if: steps.node-modules.outputs.cache-hit != 'true'
+        run: make web-install
       - run: make web-lint
       - run: make web-test
       - run: make web-build

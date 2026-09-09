@@ -1,3 +1,4 @@
+import { liveQuery, type Observable } from 'dexie'
 import { db, searchTextOf, type Note } from './schema.ts'
 import { uuidv7 } from './uuid.ts'
 
@@ -89,4 +90,30 @@ export async function restoreNote(id: string): Promise<void> {
 
 export async function countNotes(): Promise<number> {
   return db.notes.filter((note) => note.deletedAt === null).count()
+}
+
+// liveQuery rather than a counter handed down from the sync cycle: the
+// editor watches the row it is showing and never learns that a pull exists.
+// The raw row, not getNote: the caller needs `dirty` to decide whether the
+// change is safe to take.
+export function observeNote(id: string): Observable<Note | undefined> {
+  return liveQuery(() => db.notes.get(id))
+}
+
+// Beside the notes it points at rather than in localStorage, for the reason
+// the sync cursor is: cleared on its own, it would name a note this database
+// no longer holds.
+const LAST_NOTE = 'lastNoteId'
+
+export async function readLastNoteId(): Promise<string | null> {
+  const row = await db.meta.get(LAST_NOTE)
+  if (typeof row?.value !== 'string') return null
+  // getNote answers undefined for a note that was deleted as well as for one
+  // that was never here, and neither may be handed back as something to open.
+  return (await getNote(row.value)) === undefined ? null : row.value
+}
+
+export async function writeLastNoteId(id: string | null): Promise<void> {
+  if (id === null) await db.meta.delete(LAST_NOTE)
+  else await db.meta.put({ key: LAST_NOTE, value: id })
 }
