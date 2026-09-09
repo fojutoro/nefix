@@ -2,6 +2,12 @@ version: 2
 
 project_name: nefix
 
+# go:embed reads server/internal/web/dist at compile time, so the frontend has
+# to be built and copied in before goreleaser compiles anything.
+before:
+  hooks:
+    - make dist
+
 builds:
   - id: nefix
     dir: server

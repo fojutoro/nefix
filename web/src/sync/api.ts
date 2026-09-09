@@ -70,7 +70,10 @@ export type PullResponse = {
   has_more: boolean
 }
 
-async function send(path: string, init?: RequestInit): Promise<unknown> {
+export async function send(
+  path: string,
+  init?: RequestInit,
+): Promise<unknown> {
   let response: Response
   // Only the transport is guarded. fetch rejects when the request never
   // arrived; every HTTP status resolves, so a 500 read as "offline" would
@@ -92,6 +95,9 @@ async function send(path: string, init?: RequestInit): Promise<unknown> {
     if (response.status === 401) throw new UnauthenticatedError(message)
     throw new ServerError(response.status, message)
   }
+
+  // Logout answers 204 with no body, and parsing an empty body rejects.
+  if (response.status === 204) return null
 
   return await response.json()
 }

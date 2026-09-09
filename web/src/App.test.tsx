@@ -5,12 +5,21 @@ import App from './App.tsx'
 import { countNotes, createNote, deleteNote, listNotes } from './db/notes.ts'
 import { db } from './db/schema.ts'
 import i18n from './i18n/index.ts'
+import { OfflineError } from './sync/api.ts'
+import { login, logout, me } from './sync/auth.ts'
 import { sync } from './sync/index.ts'
 
 // The triggers are what the second block of tests is about, so sync itself is
 // a spy: when it is called is the whole question, not what it does. hoisted,
 // because vi.mock's factory runs before the module body.
-const { idle } = vi.hoisted(() => ({
+const { idle, account } = vi.hoisted(() => ({
+  account: {
+    id: 1,
+    username: 'jozef',
+    display_name: 'Jozef Novák',
+    email: 'jozef@example.sk',
+    role: 'student' as const,
+  },
   idle: () =>
     Promise.resolve({
       push: { pushed: 0, conflicted: 0, forbidden: 0, failed: 0 },
@@ -20,6 +29,15 @@ const { idle } = vi.hoisted(() => ({
 }))
 
 vi.mock('./sync/index.ts', () => ({ sync: vi.fn(idle) }))
+
+// The wall stands in front of every test in this file, so auth is a mock and
+// each suite says which of the three answers me() gives.
+vi.mock('./sync/auth.ts', () => ({
+  me: vi.fn(() => Promise.resolve(account)),
+  login: vi.fn(() => Promise.resolve(account)),
+  register: vi.fn(() => Promise.resolve(account)),
+  logout: vi.fn(() => Promise.resolve()),
+}))
 
 function visibility(state: 'visible' | 'hidden') {
   Object.defineProperty(document, 'visibilityState', {
@@ -48,6 +66,7 @@ describe('App', () => {
     await db.notes.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
+    vi.mocked(me).mockResolvedValue(account)
     // sync is mocked for the whole file, so nothing here reaches the network
     // and every note stays dirty, which is what the assertions below expect.
     // The stub only catches anything the mock does not cover.
@@ -111,6 +130,7 @@ describe('App sync triggers', () => {
     await db.notes.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
+    vi.mocked(me).mockResolvedValue(account)
     vi.mocked(sync).mockReset()
     vi.mocked(sync).mockImplementation(idle)
     visibility('visible')
@@ -184,6 +204,7 @@ describe('App remembering the open note', () => {
     await db.notes.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
+    vi.mocked(me).mockResolvedValue(account)
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
@@ -234,5 +255,129 @@ describe('App remembering the open note', () => {
     expect(
       screen.getByRole('button', { name: /^Diskrétna/ }).getAttribute('aria-current'),
     ).toBe('false')
+  })
+})
+
+describe('App auth wall', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await db.meta.clear()
+    await i18n.changeLanguage('en')
+    // Call history only, not the implementations set below: one test's sign
+    // in would otherwise count as the next one's.
+    vi.clearAllMocks()
+    vi.mocked(me).mockResolvedValue(account)
+    vi.mocked(login).mockResolvedValue(account)
+    vi.mocked(logout).mockResolvedValue(undefined)
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    )
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  const signIn = async () => {
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'jozef@example.sk' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'hunter2hunter2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+  }
+
+  it('renders the auth screen when me() answers 401', async () => {
+    vi.mocked(me).mockResolvedValue(null)
+
+    render(<App />)
+
+    await screen.findByRole('button', { name: 'Sign in' })
+    expect(screen.queryByRole('button', { name: 'New note' })).toBeNull()
+  })
+
+  it('renders the app after signing in with valid credentials', async () => {
+    vi.mocked(me).mockResolvedValue(null)
+    render(<App />)
+    await screen.findByRole('button', { name: 'Sign in' })
+
+    await signIn()
+
+    await screen.findByRole('button', { name: 'New note' })
+    expect(login).toHaveBeenCalledWith('jozef@example.sk', 'hunter2hunter2')
+  })
+
+  it('renders the app when me() fails on the network and notes are held locally', async () => {
+    // Someone opening the app on a train: the session cookie is valid, the
+    // notes are on the device, and only the server is out of reach. A login
+    // screen here would contradict the whole offline-first premise.
+    await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
+    vi.mocked(me).mockRejectedValue(new OfflineError('network unreachable'))
+
+    render(<App />)
+
+    await screen.findByRole('button', { name: 'New note' })
+    expect(screen.queryByLabelText('Password')).toBeNull()
+  })
+
+  it('shows the wall when me() fails on the network with nothing stored', async () => {
+    // The other half of the same rule: with no notes there is nothing to
+    // show, so an unreachable server is not a reason to skip the wall.
+    vi.mocked(me).mockRejectedValue(new OfflineError('network unreachable'))
+
+    render(<App />)
+
+    await screen.findByRole('button', { name: 'Sign in' })
+  })
+
+  it('clears IndexedDB when signing out', async () => {
+    await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
+    await db.meta.put({ key: 'syncCursor', value: 42 })
+    render(<App />)
+    await screen.findByRole('button', { name: 'New note' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    await waitFor(async () => expect(await db.notes.count()).toBe(0))
+    // The cursor and the remembered note go too: one left behind would tell
+    // the next account's pull it is already caught up.
+    expect(await db.meta.count()).toBe(0)
+    expect(logout).toHaveBeenCalled()
+    await screen.findByRole('button', { name: 'Sign in' })
+  })
+
+  it('names the number of unsynced notes when signing out', async () => {
+    await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
+    await createNote({ title: 'Lineárna algebra', bodyMd: 'vektory' })
+    render(<App />)
+    await screen.findByRole('button', { name: 'New note' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled())
+    expect(vi.mocked(window.confirm).mock.calls[0]![0]).toBe(
+      '2 notes have not synced yet and will be lost. Sign out anyway?',
+    )
+  })
+
+  it('rejects a short password without reaching the server', async () => {
+    vi.mocked(me).mockResolvedValue(null)
+    render(<App />)
+    await screen.findByRole('button', { name: 'Sign in' })
+
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'jozef@example.sk' },
+    })
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'short' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await screen.findByText('Password must be 8 to 128 bytes.')
+    expect(login).not.toHaveBeenCalled()
   })
 })

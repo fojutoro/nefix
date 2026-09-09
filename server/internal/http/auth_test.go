@@ -285,10 +285,13 @@ func TestResponsesNeverCarryTheSecret(t *testing.T) {
 	}
 }
 
+// /dev is a path like any other now when the page is off, so what matters is
+// that the page itself is not served, not which status the frontend answers
+// the unclaimed path with.
 func TestDevPageOffByDefault(t *testing.T) {
 	rec := call(t, newAPI(t), http.MethodGet, "/dev", nil)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	if bytes.Contains(rec.Body.Bytes(), []byte("nefix dev page")) {
+		t.Errorf("the dev page was served with NEFIX_DEV_PAGE unset: %s", rec.Body.Bytes())
 	}
 }
 
