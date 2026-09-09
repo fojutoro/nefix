@@ -3,8 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createNote } from '../db/notes.ts'
 import { db, type Note } from '../db/schema.ts'
 import i18n from '../i18n/index.ts'
-import type { PushNote, PushResult, WireNote } from './api.ts'
-import { pushDirtyNotes } from './push.ts'
+import { createClass } from '../db/classes.ts'
+import type {
+  PushClass,
+  PushNote,
+  PushNotebook,
+  PushResult,
+  WireClass,
+  WireNotebook,
+  WireNote,
+} from './api.ts'
+import { pushDirtyRows } from './push.ts'
 import { syncState } from './state.ts'
 
 const wire = (note: Note, over: Partial<WireNote> = {}): WireNote => ({
@@ -44,6 +53,7 @@ function serve(handler: Handler): PushNote[][] {
 const accept = (sent: PushNote[]): PushResult[] =>
   sent.map((note) => ({
     id: note.id,
+    kind: 'note' as const,
     status: 'accepted' as const,
     note: { ...note, version: note.version + 1, seq: 7, created_at: 'c', updated_at: '2026-08-05T12:00:00.000Z' },
   }))
@@ -55,6 +65,8 @@ const CSRF_FIXTURE = 'nefix_csrf=Zm9yLXRlc3Rz'
 beforeEach(async () => {
   document.cookie = CSRF_FIXTURE
   await db.notes.clear()
+  await db.classes.clear()
+  await db.notebooks.clear()
   await i18n.changeLanguage('en')
   syncState.setState({
     status: 'idle',
@@ -66,14 +78,14 @@ beforeEach(async () => {
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe('pushDirtyNotes', () => {
+describe('pushDirtyRows', () => {
   it('sends only the dirty notes', async () => {
     const dirty = await createNote({ title: 'dirty' })
     const clean = await createNote({ title: 'clean' })
     await db.notes.update(clean.id, { dirty: false })
 
     const batches = serve(accept)
-    await pushDirtyNotes()
+    await pushDirtyRows()
 
     expect(batches).toHaveLength(1)
     expect(batches[0]!.map((note) => note.id)).toEqual([dirty.id])
@@ -82,10 +94,15 @@ describe('pushDirtyNotes', () => {
   it('clears dirty and stores the returned version on accepted', async () => {
     const note = await createNote({ title: 'algebra' })
     serve((sent) => [
-      { id: sent[0]!.id, status: 'accepted', note: wire(note, { version: 4 }) },
+      {
+        id: sent[0]!.id,
+        kind: 'note',
+        status: 'accepted',
+        note: wire(note, { version: 4 }),
+      },
     ])
 
-    const summary = await pushDirtyNotes()
+    const summary = await pushDirtyRows()
 
     expect(summary).toMatchObject({ pushed: 1, conflicted: 0, failed: 0 })
     expect(await db.notes.get(note.id)).toMatchObject({
@@ -101,12 +118,17 @@ describe('pushDirtyNotes', () => {
     serve((sent) => [
       {
         id: sent[0]!.id,
+        kind: 'note',
         status: 'conflict',
-        note: wire(note, { title: 'theirs', body_md: 'server body', version: 9 }),
+        note: wire(note, {
+          title: 'theirs',
+          body_md: 'server body',
+          version: 9,
+        }),
       },
     ])
 
-    const summary = await pushDirtyNotes()
+    const summary = await pushDirtyRows()
 
     expect(summary).toMatchObject({ pushed: 0, conflicted: 1 })
     // The server's copy takes the original id, clean and at the server's
@@ -143,10 +165,17 @@ describe('pushDirtyNotes', () => {
         bodyMd: 'typed while syncing',
         updatedAt: '2099-01-01T00:00:00.000Z',
       })
-      return [{ id: sent[0]!.id, status: 'accepted', note: wire(note, { version: 3 }) }]
+      return [
+        {
+          id: sent[0]!.id,
+          kind: 'note' as const,
+          status: 'accepted' as const,
+          note: wire(note, { version: 3 }),
+        },
+      ]
     })
 
-    await pushDirtyNotes()
+    await pushDirtyRows()
 
     expect(await db.notes.get(note.id)).toMatchObject({
       bodyMd: 'typed while syncing',
@@ -163,7 +192,7 @@ describe('pushDirtyNotes', () => {
       Array.from({ length: 101 }, (_, index) => ({
         id: `0192f0a1-3c4d-7e8f-9a0b-${String(index).padStart(12, '0')}`,
         classId: null,
-  notebookId: null,
+        notebookId: null,
         title: `note ${index}`,
         bodyMd: '',
         searchText: `note ${index}`,
@@ -179,7 +208,7 @@ describe('pushDirtyNotes', () => {
     )
 
     const batches = serve(accept)
-    await pushDirtyNotes()
+    await pushDirtyRows()
 
     expect(batches.map((batch) => batch.length)).toEqual([100, 1])
   })
@@ -191,7 +220,7 @@ describe('pushDirtyNotes', () => {
       vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
     )
 
-    const summary = await pushDirtyNotes()
+    const summary = await pushDirtyRows()
 
     expect(summary.failed).toBe(1)
     expect((await db.notes.toArray()).every((note) => note.dirty)).toBe(true)
@@ -211,7 +240,7 @@ describe('pushDirtyNotes', () => {
       ),
     )
 
-    const summary = await pushDirtyNotes()
+    const summary = await pushDirtyRows()
 
     expect(summary.failed).toBe(1)
     expect((await db.notes.toArray()).every((note) => note.dirty)).toBe(true)
@@ -222,7 +251,7 @@ describe('pushDirtyNotes', () => {
     await createNote({ title: 'algebra' })
     const batches = serve(accept)
 
-    await Promise.all([pushDirtyNotes(), pushDirtyNotes()])
+    await Promise.all([pushDirtyRows(), pushDirtyRows()])
 
     expect(batches).toHaveLength(1)
   })
@@ -242,11 +271,11 @@ describe('pushDirtyNotes', () => {
         throw new Error('a subscriber blew up')
       }
     })
-    await pushDirtyNotes().catch(() => undefined)
+    await pushDirtyRows().catch(() => undefined)
     unsubscribe()
 
     batches.length = 0
-    await pushDirtyNotes()
+    await pushDirtyRows()
 
     // A request, not a resolved promise: a stranded guard returns the empty
     // summary quite happily and sends nothing.
@@ -263,7 +292,7 @@ describe('the CSRF guard', () => {
     const calls = serve(accept)
     await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
 
-    const summary = await pushDirtyNotes()
+    const summary = await pushDirtyRows()
 
     // Nothing went out. A request sent without the header comes back 403 and
     // reads like a server fault instead of a missing cookie.
@@ -272,5 +301,204 @@ describe('the CSRF guard', () => {
     expect(syncState.current.status).toBe('error')
     // Still dirty, so the note is sent once signing in restores the cookie.
     expect(await db.notes.filter((note) => note.dirty).count()).toBe(1)
+  })
+})
+
+
+type PushBody = {
+  classes: PushClass[]
+  notebooks: PushNotebook[]
+  notes: PushNote[]
+}
+
+// The whole request rather than one array of it, so the three can be
+// asserted against each other.
+function serveRows(handler: (body: PushBody) => PushResult[]): PushBody[] {
+  const sent: PushBody[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as PushBody
+      sent.push(body)
+      return { ok: true, status: 200, json: async () => ({ results: handler(body) }) }
+    }),
+  )
+  return sent
+}
+
+const acceptedClass = (row: PushClass): PushResult => ({
+  id: row.id,
+  kind: 'class',
+  status: 'accepted',
+  class: { ...row, version: row.version + 1, seq: 1, created_at: 'c', updated_at: 'u' },
+})
+
+const acceptedNotebook = (row: PushNotebook): PushResult => ({
+  id: row.id,
+  kind: 'notebook',
+  status: 'accepted',
+  notebook: { ...row, version: row.version + 1, seq: 2, created_at: 'c', updated_at: 'u' },
+})
+
+const acceptedNote = (row: PushNote): PushResult => ({
+  id: row.id,
+  kind: 'note',
+  status: 'accepted',
+  note: { ...row, version: row.version + 1, seq: 3, created_at: 'c', updated_at: 'u' },
+})
+
+const acceptEverything = (body: PushBody): PushResult[] => [
+  ...body.classes.map(acceptedClass),
+  ...body.notebooks.map(acceptedNotebook),
+  ...body.notes.map(acceptedNote),
+]
+
+describe('pushing classes and notebooks', () => {
+  it('sends all three kinds in one request and clears every dirty flag', async () => {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+    const notebook = (await db.notebooks.toArray())[0]!
+    await createNote({ title: 'Množiny', notebookId: notebook.id })
+
+    const sent = serveRows(acceptEverything)
+    const summary = await pushDirtyRows()
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]!.classes.map((row) => row.id)).toEqual([created.id])
+    expect(sent[0]!.notebooks.map((row) => row.id)).toEqual([notebook.id])
+    expect(sent[0]!.notes).toHaveLength(1)
+    // The general notebook rides with its class, so the server never briefly
+    // holds a notebook whose class it has not seen.
+    expect(sent[0]!.notebooks[0]!.class_id).toBe(created.id)
+    expect(sent[0]!.notebooks[0]!.is_general).toBe(true)
+
+    expect(summary.pushed).toBe(3)
+    expect((await db.classes.get(created.id))?.dirty).toBe(false)
+    expect((await db.classes.get(created.id))?.version).toBe(1)
+    expect((await db.notebooks.get(notebook.id))?.dirty).toBe(false)
+    expect((await db.notes.toArray())[0]!.dirty).toBe(false)
+  })
+
+  it('takes the server copy of a conflicted notebook without forking', async () => {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+    const local = (await db.notebooks.toArray())[0]!
+    await db.notebooks.update(local.id, { name: 'Renamed on this device' })
+
+    serveRows((body) => [
+      ...body.classes.map(acceptedClass),
+      {
+        id: local.id,
+        kind: 'notebook',
+        status: 'conflict',
+        notebook: {
+          id: local.id,
+          class_id: created.id,
+          name: 'Renamed on the other device',
+          is_general: true,
+          version: 5,
+          seq: 9,
+          created_at: local.createdAt,
+          updated_at: '2026-08-05T12:00:00.000Z',
+          deleted_at: null,
+        } satisfies WireNotebook,
+      },
+    ])
+
+    const summary = await pushDirtyRows()
+
+    // Last write wins, deliberately unlike a note: one row, not two.
+    const rows = await db.notebooks.toArray()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: local.id,
+      name: 'Renamed on the other device',
+      version: 5,
+      dirty: false,
+      syncedAt: '2026-08-05T12:00:00.000Z',
+    })
+    expect(summary.conflicted).toBe(1)
+  })
+
+  it('takes the server copy of a conflicted class without forking', async () => {
+    const created = await createClass({ name: 'Renamed on this device' })
+
+    serveRows((body) => [
+      {
+        id: created.id,
+        kind: 'class',
+        status: 'conflict',
+        class: {
+          id: created.id,
+          name: 'Renamed on the other device',
+          code: null,
+          colour: null,
+          semester: null,
+          archived_at: null,
+          version: 4,
+          seq: 8,
+          created_at: created.createdAt,
+          updated_at: '2026-08-05T12:00:00.000Z',
+          deleted_at: null,
+        } satisfies WireClass,
+      },
+      ...body.notebooks.map(acceptedNotebook),
+    ])
+
+    await pushDirtyRows()
+
+    const rows = await db.classes.toArray()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      name: 'Renamed on the other device',
+      version: 4,
+      dirty: false,
+    })
+  })
+
+  it('still forks a conflicted note, which classes and notebooks do not', async () => {
+    const note = await createNote({ title: 'Množiny' })
+
+    serveRows((body) => [
+      {
+        id: note.id,
+        kind: 'note',
+        status: 'conflict',
+        note: wire(note, { title: 'the server copy', version: 9 }),
+      },
+      ...body.classes.map(acceptedClass),
+    ])
+
+    await pushDirtyRows()
+
+    // The two rules sit side by side on purpose. A note holds writing that
+    // only exists on this device; a notebook name does not.
+    expect(await db.notes.count()).toBe(2)
+    expect(await db.classes.count()).toBe(0)
+  })
+
+  it('splits each array at a hundred independently', async () => {
+    const now = new Date().toISOString()
+    await db.notebooks.bulkAdd(
+      Array.from({ length: 101 }, (_, index) => ({
+        id: `0192f0c1-3c4d-7e8f-9a0b-${String(index).padStart(12, '0')}`,
+        classId: null,
+        name: `notebook ${index}`,
+        isGeneral: false,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+        version: 0,
+        dirty: true,
+        syncedAt: null,
+      })),
+    )
+    await createNote({ title: 'Množiny' })
+
+    const sent = serveRows(acceptEverything)
+    await pushDirtyRows()
+
+    expect(sent.map((body) => body.notebooks.length)).toEqual([100, 1])
+    // The note travels with the first request rather than waiting for the
+    // notebooks to drain.
+    expect(sent.map((body) => body.notes.length)).toEqual([1, 0])
   })
 })

@@ -2,7 +2,13 @@ import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createNote } from '../db/notes.ts'
 import { db, type Note } from '../db/schema.ts'
-import type { PullResponse, WireNote } from './api.ts'
+import { createClass } from '../db/classes.ts'
+import type {
+  PullResponse,
+  WireClass,
+  WireNotebook,
+  WireNote,
+} from './api.ts'
 import { pullRemoteChanges } from './pull.ts'
 
 const remote = (over: Partial<WireNote> = {}): WireNote => ({
@@ -25,7 +31,41 @@ const page = (
   notes: WireNote[],
   cursor: number,
   hasMore = false,
-): PullResponse => ({ notes, cursor, has_more: hasMore })
+): PullResponse => ({
+  classes: [],
+  notebooks: [],
+  notes,
+  cursor,
+  has_more: hasMore,
+})
+
+const remoteClass = (over: Partial<WireClass> = {}): WireClass => ({
+  id: '0192f0b1-3c4d-7e8f-9a0b-1c2d3e4f5a6b',
+  name: 'Diskrétna matematika',
+  code: '1-AIN-101',
+  colour: null,
+  semester: '2026Z',
+  archived_at: null,
+  version: 2,
+  seq: 10,
+  created_at: '2026-08-05T09:30:00.000Z',
+  updated_at: '2026-08-05T11:02:00.000Z',
+  deleted_at: null,
+  ...over,
+})
+
+const remoteNotebook = (over: Partial<WireNotebook> = {}): WireNotebook => ({
+  id: '0192f0c1-3c4d-7e8f-9a0b-1c2d3e4f5a6b',
+  class_id: '0192f0b1-3c4d-7e8f-9a0b-1c2d3e4f5a6b',
+  name: 'Prednášky',
+  is_general: true,
+  version: 1,
+  seq: 11,
+  created_at: '2026-08-05T09:30:00.000Z',
+  updated_at: '2026-08-05T11:02:00.000Z',
+  deleted_at: null,
+  ...over,
+})
 
 // Records the `since` of every request so paging can be asserted on the wire
 // and not only on the rows it left behind.
@@ -49,6 +89,8 @@ const cursor = async (): Promise<number | string | undefined> =>
 
 beforeEach(async () => {
   await db.notes.clear()
+  await db.classes.clear()
+  await db.notebooks.clear()
   await db.meta.clear()
 })
 
@@ -180,5 +222,92 @@ describe('pullRemoteChanges', () => {
     expect(await db.notes.get('note-a')).toBeUndefined()
 
     vi.restoreAllMocks()
+  })
+})
+
+
+describe('pulling classes and notebooks', () => {
+  it('applies all three kinds from one page and stores the cursor once', async () => {
+    serve([
+      {
+        classes: [remoteClass()],
+        notebooks: [remoteNotebook()],
+        notes: [remote({ seq: 12 })],
+        cursor: 12,
+        has_more: false,
+      },
+    ])
+
+    const summary = await pullRemoteChanges()
+
+    expect(summary.applied).toBe(3)
+    expect(await db.classes.count()).toBe(1)
+    expect(await db.notebooks.count()).toBe(1)
+    expect(await db.notes.count()).toBe(1)
+
+    const stored = await db.classes.get(remoteClass().id)
+    expect(stored).toMatchObject({
+      name: 'Diskrétna matematika',
+      code: '1-AIN-101',
+      semester: '2026Z',
+      archivedAt: null,
+      version: 2,
+      dirty: false,
+      syncedAt: '2026-08-05T11:02:00.000Z',
+    })
+    expect((await db.notebooks.toArray())[0]).toMatchObject({
+      classId: remoteClass().id,
+      isGeneral: true,
+      dirty: false,
+    })
+    // One cursor for the page, written after all three arrays.
+    expect((await db.meta.get('syncCursor'))?.value).toBe(12)
+  })
+
+  it('carries an archived class and a deleted notebook', async () => {
+    serve([
+      {
+        classes: [remoteClass({ archived_at: '2026-08-05T11:00:00.000Z' })],
+        notebooks: [remoteNotebook({ deleted_at: '2026-08-05T11:00:00.000Z' })],
+        notes: [],
+        cursor: 12,
+        has_more: false,
+      },
+    ])
+
+    await pullRemoteChanges()
+
+    expect((await db.classes.toArray())[0]?.archivedAt).toBe(
+      '2026-08-05T11:00:00.000Z',
+    )
+    // A soft delete reaching this device is the whole reason deleted rows
+    // travel; the row stays, hidden by the read helpers.
+    expect((await db.notebooks.toArray())[0]?.deletedAt).toBe(
+      '2026-08-05T11:00:00.000Z',
+    )
+  })
+
+  it('leaves a dirty class alone rather than overwriting it', async () => {
+    const created = await createClass({ name: 'Renamed here, not yet pushed' })
+
+    serve([
+      {
+        classes: [remoteClass({ id: created.id, name: 'The server copy' })],
+        notebooks: [],
+        notes: [],
+        cursor: 12,
+        has_more: false,
+      },
+    ])
+
+    const summary = await pullRemoteChanges()
+
+    // The one row a pull must never write over: it holds an edit the server
+    // has not seen, and the next push is what resolves it.
+    expect((await db.classes.get(created.id))?.name).toBe(
+      'Renamed here, not yet pushed',
+    )
+    expect(summary.applied).toBe(0)
+    expect(summary.skipped).toBe(1)
   })
 })

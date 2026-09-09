@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
+import { createNotebook } from './db/notebooks.ts'
 import { countNotes, createNote, deleteNote, listNotes } from './db/notes.ts'
 import { db } from './db/schema.ts'
 import i18n from './i18n/index.ts'
@@ -261,6 +262,8 @@ describe('App remembering the open note', () => {
 describe('App auth wall', () => {
   beforeEach(async () => {
     await db.notes.clear()
+    await db.classes.clear()
+    await db.notebooks.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     // Call history only, not the implementations set below: one test's sign
@@ -360,7 +363,24 @@ describe('App auth wall', () => {
 
     await waitFor(() => expect(window.confirm).toHaveBeenCalled())
     expect(vi.mocked(window.confirm).mock.calls[0]![0]).toBe(
-      '2 notes have not synced yet and will be lost. Sign out anyway?',
+      '2 changes have not synced yet and will be lost. Sign out anyway?',
+    )
+  })
+
+  it('warns about an unsynced notebook when no note is unsynced', async () => {
+    await createNotebook('Cvičenia')
+    expect(await db.notes.count()).toBe(0)
+
+    render(<App />)
+    await screen.findByRole('button', { name: 'New note' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    // Counting notes alone, this reads as nothing to lose, and the notebook
+    // is then deleted by a confirmation that promised it was not there.
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled())
+    expect(vi.mocked(window.confirm).mock.calls[0]![0]).toBe(
+      '1 change has not synced yet and will be lost. Sign out anyway?',
     )
   })
 
