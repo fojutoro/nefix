@@ -92,6 +92,23 @@ export async function countNotes(): Promise<number> {
   return db.notes.filter((note) => note.deletedAt === null).count()
 }
 
+// Deleted ones included: a soft delete that has not reached the server is
+// unsynced work like any other, and signing out would lose it.
+export async function countDirtyNotes(): Promise<number> {
+  return db.notes.filter((note) => note.dirty).count()
+}
+
+// Signing out on a shared or university machine has to mean the notes are
+// gone, so the sync cursor and the remembered note go with them: a cursor
+// left behind would tell the next account's pull that it is already caught
+// up on notes this device has never held.
+export async function clearEverything(): Promise<void> {
+  await db.transaction('rw', db.notes, db.meta, async () => {
+    await db.notes.clear()
+    await db.meta.clear()
+  })
+}
+
 // liveQuery rather than a counter handed down from the sync cycle: the
 // editor watches the row it is showing and never learns that a pull exists.
 // The raw row, not getNote: the caller needs `dirty` to decide whether the

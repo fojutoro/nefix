@@ -104,10 +104,17 @@ response would hand a client data older than what it already holds.
 
 ## Embedding the frontend
 
-The build copies `web/dist` into `server/internal/web/dist/`, which is
-gitignored, because `go:embed` cannot reach outside its own module
-directory. The result is one binary that serves both the API and the
-client. Not implemented yet.
+`make dist` copies `web/dist` into `server/internal/web/dist/`, which is
+gitignored apart from a tracked `.gitkeep`, because `go:embed` cannot reach
+outside its own module directory and fails to compile when its pattern matches
+nothing; a binary built without that copy answers 503 on the frontend's paths
+and serves the API normally. `server/internal/web` embeds the directory and
+mounts last, behind a prefix check so it cannot shadow `/api/` or `/health`:
+a path that names no file is answered with `index.html` so that deep links and
+reloads work, unless it has a file extension, in which case it is a 404,
+because HTML sent in answer to a request for JavaScript fails with a MIME
+error that says nothing about the real cause. Hashed assets under `/assets/`
+are immutable for a year and everything else is `no-cache`.
 
 ## Sync
 

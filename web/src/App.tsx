@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  clearEverything,
+  countDirtyNotes,
+  countNotes,
   createNote,
   deleteNote,
   readLastNoteId,
@@ -8,10 +11,12 @@ import {
   writeLastNoteId,
 } from './db/notes.ts'
 import type { Note } from './db/schema.ts'
+import AuthScreen from './features/auth/AuthScreen.tsx'
 import Editor from './features/notes/Editor.tsx'
 import NoteList from './features/notes/NoteList.tsx'
 import { searchNotes } from './features/notes/search.ts'
 import { useAutosave } from './features/notes/useAutosave.ts'
+import { logout, me } from './sync/auth.ts'
 import { sync as runSync } from './sync/index.ts'
 import { useSyncState } from './sync/state.ts'
 
@@ -34,7 +39,7 @@ function relative(at: number, language: string): string {
   return format.format(Math.round(seconds / 3600), 'hour')
 }
 
-export default function App() {
+function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
   const { t, i18n } = useTranslation()
   // null until the first read finishes, so the empty state is not shown to
   // someone who simply has a slow disk.
@@ -160,6 +165,23 @@ export default function App() {
     await refresh()
   }
 
+  const signOut = async () => {
+    const dirty = await countDirtyNotes()
+    const question =
+      dirty > 0
+        ? t('auth.signOutConfirmDirty', { count: dirty })
+        : t('auth.signOutConfirm')
+    if (!window.confirm(question)) return
+    // Cleared whether or not the request reached the server. The confirmation
+    // promised that the notes leave this device, and a shared machine with no
+    // network is exactly when that promise matters most. Anything the server
+    // already has comes back on the next sign-in; anything it does not was
+    // named in the confirmation.
+    await logout().catch(() => undefined)
+    await clearEverything()
+    onSignedOut()
+  }
+
   const selected = notes?.find((note) => note.id === selectedId) ?? null
 
   // navigator.onLine leads, because it reports the loss before a request has
@@ -210,20 +232,61 @@ export default function App() {
           onCreate={() => void create()}
           onDelete={(id) => void remove(id)}
         />
+        {sync.status === 'unauthenticated' && (
+          // Offered, never forced: throwing someone back to the login screen
+          // mid-sentence would lose nothing from IndexedDB but would feel
+          // exactly like it had.
+          <p className="banner" role="alert">
+            {t('auth.sessionEnded')}
+            <button type="button" onClick={onSignedOut}>
+              {t('auth.signInAgain')}
+            </button>
+          </p>
+        )}
         <p className="offline" role="status">
           {syncLine}
         </p>
-        <button
-          type="button"
-          className="language"
-          onClick={() =>
-            void i18n.changeLanguage(i18n.language === 'sk' ? 'en' : 'sk')
-          }
-        >
-          {t('app.switchLanguage')}
-        </button>
+        <div className="side-actions">
+          <button
+            type="button"
+            className="language"
+            onClick={() =>
+              void i18n.changeLanguage(i18n.language === 'sk' ? 'en' : 'sk')
+            }
+          >
+            {t('app.switchLanguage')}
+          </button>
+          <button type="button" onClick={() => void signOut()}>
+            {t('auth.signOut')}
+          </button>
+        </div>
       </div>
       <main className="pane">{pane}</main>
     </div>
   )
+}
+
+// Three outcomes, not two: a user, a 401, or no answer at all.
+type Gate = 'checking' | 'in' | 'out'
+
+export default function App() {
+  const [gate, setGate] = useState<Gate>('checking')
+
+  useEffect(() => {
+    void me()
+      .then((user) => setGate(user === null ? 'out' : 'in'))
+      .catch(async () => {
+        // Not a 401: the request never got an answer. A session cookie plus
+        // notes on the device is someone on a train, and a login screen there
+        // would contradict the whole offline-first premise. With nothing
+        // stored there is nothing to show, so the wall stands.
+        setGate((await countNotes()) > 0 ? 'in' : 'out')
+      })
+  }, [])
+
+  // Blank rather than a login screen: showing the wall for the length of one
+  // request and then replacing it would be a flash of the wrong answer.
+  if (gate === 'checking') return null
+  if (gate === 'out') return <AuthScreen onSignedIn={() => setGate('in')} />
+  return <Workspace onSignedOut={() => setGate('out')} />
 }

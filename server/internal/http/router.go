@@ -5,8 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/fojutoro/nefix/server/internal/store"
+	"github.com/fojutoro/nefix/server/internal/web"
 )
 
 type health struct {
@@ -57,10 +59,32 @@ func New(version, commit string, db *store.DB, cfg CookieConfig) http.Handler {
 
 	mux.Handle("/api/v1/", srv.withUser(api))
 
-	if os.Getenv("NEFIX_DEV_PAGE") == "true" {
+	devEnabled := os.Getenv("NEFIX_DEV_PAGE") == "true"
+	if devEnabled {
 		slog.Warn("dev page enabled at /dev, development only", "env", "NEFIX_DEV_PAGE=true")
 		mux.HandleFunc("GET /dev", devPage)
 	}
 
-	return noStore(mux)
+	// A prefix check rather than a "/" pattern on the same mux. Registered as
+	// a pattern, "/" would answer a POST to /health, because "GET /health"
+	// does not match it and the catch-all does — turning a 405 into a page.
+	frontend := web.Handler()
+	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if served(r.URL.Path, devEnabled) {
+			mux.ServeHTTP(w, r)
+			return
+		}
+
+		frontend.ServeHTTP(w, r)
+	})
+
+	return noStore(root)
+}
+
+// The paths the server answers itself. Everything else belongs to the client,
+// including paths that exist only in its router.
+func served(path string, devEnabled bool) bool {
+	return path == "/health" ||
+		strings.HasPrefix(path, "/api/") ||
+		(devEnabled && path == "/dev")
 }

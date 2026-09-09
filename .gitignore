@@ -12,7 +12,14 @@ go.work.sum
 # Build output
 bin/
 dist/
-server/internal/web/dist/
+# Filled by `make dist`. The placeholder is tracked because //go:embed fails
+# to compile when its pattern matches nothing, so a fresh clone would not
+# build without it. The directory is re-included first: `dist/` above excludes
+# it, and git does not look inside an excluded directory, so the negation
+# below would never be read.
+!server/internal/web/dist/
+server/internal/web/dist/*
+!server/internal/web/dist/.gitkeep
 
 # Node
 node_modules/

@@ -8,7 +8,7 @@ GOBIN := $(shell go env GOPATH)/bin
 STATICCHECK := $(shell command -v staticcheck 2>/dev/null || echo $(GOBIN)/staticcheck)
 GORELEASER := $(shell command -v goreleaser 2>/dev/null || echo $(GOBIN)/goreleaser)
 
-.PHONY: help dev test go-test build lint go-lint release-check clean \
+.PHONY: help dev test go-test build dist lint go-lint release-check clean \
 	web-install web-dev web-build web-lint web-test
 
 help:
@@ -16,6 +16,7 @@ help:
 	@echo "  dev    run the server on 127.0.0.1:8080"
 	@echo "  test   go-test and web-test"
 	@echo "  build  static binary into bin/nefix"
+	@echo "  dist   build the frontend into the binary, then build it"
 	@echo "  lint   go-lint and web-lint plus the web type check"
 	@echo "  release-check  validate .goreleaser.yml and build a snapshot"
 	@echo "  clean  remove bin/"
@@ -39,6 +40,15 @@ go-test:
 build:
 	@mkdir -p bin
 	CGO_ENABLED=0 go -C server build -ldflags "$(LDFLAGS)" -o ../bin/nefix ./cmd/nefix
+
+# go:embed cannot reach outside its own module directory, so the frontend
+# build is copied in before the binary is compiled. .gitkeep is kept: it is
+# what lets `go build ./...` work in a tree where the frontend has never been
+# built, since an embed pattern matching no files does not compile.
+dist: web-build
+	find server/internal/web/dist -mindepth 1 ! -name .gitkeep -delete
+	cp -R web/dist/. server/internal/web/dist/
+	$(MAKE) build
 
 lint: go-lint web-lint
 	npm --prefix web run typecheck
