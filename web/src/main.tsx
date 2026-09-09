@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import './i18n/index.ts'
+import 'katex/dist/katex.min.css'
 import './index.css'
 import App from './App.tsx'
 
