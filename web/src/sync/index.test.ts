@@ -89,4 +89,32 @@ describe('sync', () => {
 
     expect(calls).toEqual(['/api/v1/sync/push', '/api/v1/sync/pull'])
   })
+
+  it('releases the guard when a sync throws', async () => {
+    await createNote({ title: 'algebra' })
+    const calls = record()
+    // Everything inside sync() is caught, so the one way an exception escapes
+    // it is a subscriber throwing while the failure is being reported. The
+    // guard has to be released anyway: a leak here is a sync engine that
+    // stops for good after one bad moment and never says so.
+    let notifications = 0
+    const unsubscribe = syncState.subscribe(() => {
+      notifications += 1
+      if (notifications >= 3) throw new Error('a subscriber blew up')
+    })
+
+    await expect(sync()).rejects.toThrow('a subscriber blew up')
+
+    unsubscribe()
+    calls.length = 0
+    // The first run's note was accepted, so a fresh one gives the recovered
+    // run a push to make and keeps the assertion off an empty queue.
+    await createNote({ title: 'diskrétna matematika' })
+
+    await sync()
+
+    // The proof is a request, not a resolved promise: a wedged guard returns
+    // the empty summary quite happily and touches nothing.
+    expect(calls).toEqual(['/api/v1/sync/push', '/api/v1/sync/pull'])
+  })
 })

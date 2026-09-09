@@ -119,11 +119,14 @@ export async function pushDirtyNotes(): Promise<PushSummary> {
   }
   if (running) return summary
   running = true
-  syncState.setState({ status: 'syncing' })
 
   let queued = 0
   let handled = 0
   try {
+    // Inside the try, because publishing the status notifies subscribers and
+    // one of them can throw. Outside it, that throw would strand the guard
+    // and every later push would return having sent nothing, silently.
+    syncState.setState({ status: 'syncing' })
     // dirty is a boolean, so it is absent from its index and this filters in
     // memory. See the note on declareSchema.
     const dirty = await db.notes.filter((note) => note.dirty).toArray()
