@@ -11,6 +11,9 @@ export const en = {
   'sync.lastSynced': 'Synced {{when}}.',
   // Suffixed onto the copy kept when the server rejects a stale push.
   'sync.olderVersion': '(older version)',
+  // The notebook created with a class, so there is somewhere to type at
+  // once. Renameable afterwards, so this is a starting point, not a name.
+  'notebooks.general': 'General',
   'search.label': 'Search notes',
   'search.placeholder': 'Search',
   'search.clear': 'Clear search',

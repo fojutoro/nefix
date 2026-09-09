@@ -10,6 +10,7 @@ export const sk = {
   'sync.never': 'Zatiaľ nesynchronizované.',
   'sync.lastSynced': 'Synchronizované {{when}}.',
   'sync.olderVersion': '(stará verzia)',
+  'notebooks.general': 'Všeobecné',
   'search.label': 'Hľadať v poznámkach',
   'search.placeholder': 'Hľadať',
   'search.clear': 'Zrušiť hľadanie',

@@ -9,14 +9,17 @@ import { uuidv7 } from './uuid.ts'
 export async function createNote(input: {
   title?: string
   bodyMd?: string
-  classId?: string | null
+  notebookId?: string | null
 }): Promise<Note> {
   const now = new Date().toISOString()
   const title = input.title ?? ''
   const bodyMd = input.bodyMd ?? ''
   const note: Note = {
     id: uuidv7(),
-    classId: input.classId ?? null,
+    // Never set. See the comment on Note.classId: the server decodes it as
+    // an integer and a non-null value is a 400.
+    classId: null,
+    notebookId: input.notebookId ?? null,
     title,
     bodyMd,
     searchText: searchTextOf(title, bodyMd),
@@ -38,11 +41,20 @@ export async function getNote(id: string): Promise<Note | undefined> {
   return note?.deletedAt === null ? note : undefined
 }
 
-export async function listNotes(): Promise<Note[]> {
+// The argument is the value being matched rather than a sentinel to
+// remember: undefined asks for every note, a string for that notebook, and
+// null for the unfiled ones, which is exactly what those notes hold. A
+// separate listUnfiledNotes would be a second function to keep in step with
+// this one's ordering and its delete filter.
+export async function listNotes(notebookId?: string | null): Promise<Note[]> {
   return db.notes
     .orderBy('updatedAt')
     .reverse()
-    .filter((note) => note.deletedAt === null)
+    .filter(
+      (note) =>
+        note.deletedAt === null &&
+        (notebookId === undefined || note.notebookId === notebookId),
+    )
     .toArray()
 }
 
@@ -103,9 +115,9 @@ export async function countDirtyNotes(): Promise<number> {
 // left behind would tell the next account's pull that it is already caught
 // up on notes this device has never held.
 export async function clearEverything(): Promise<void> {
-  await db.transaction('rw', db.notes, db.meta, async () => {
-    await db.notes.clear()
-    await db.meta.clear()
+  const tables = [db.notes, db.classes, db.notebooks, db.meta]
+  await db.transaction('rw', tables, async () => {
+    for (const table of tables) await table.clear()
   })
 }
 

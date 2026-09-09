@@ -13,13 +13,14 @@ const V2_STORES = 'id, updatedAt, deletedAt, dirty, classId, searchText'
 // application's own instance can never be again.
 const NAME = 'nefix-upgrade-test'
 const V2_NAME = 'nefix-upgrade-test-v2'
+const V3_NAME = 'nefix-upgrade-test-v3'
 
 const v1Note = (
   id: string,
   title: string,
   bodyMd: string,
   deletedAt: string | null = null,
-): Omit<Note, 'searchText'> => ({
+): Omit<Note, 'searchText' | 'notebookId'> => ({
   id,
   classId: null,
   title,
@@ -53,7 +54,7 @@ describe('the v1 upgrade', () => {
 
     // Every version since is applied at once, which is what a device that
     // skipped a release actually does.
-    expect(after.verno).toBe(3)
+    expect(after.verno).toBe(4)
     const rows = after.table<Note>('notes')
 
     const upgraded = await rows.get('a')
@@ -100,7 +101,7 @@ describe('the v2 to v3 upgrade', () => {
     declareSchema(after)
     await after.open()
 
-    expect(after.verno).toBe(3)
+    expect(after.verno).toBe(4)
     const rows = after.table<Note>('notes')
     expect(await rows.count()).toBe(2)
     // The notes survive untouched: v3 declares only the new store, so the
@@ -119,6 +120,64 @@ describe('the v2 to v3 upgrade', () => {
     expect(await meta.get('syncCursor')).toBeUndefined()
     await meta.put({ key: 'syncCursor', value: 42 })
     expect((await meta.get('syncCursor'))?.value).toBe(42)
+
+    after.close()
+  })
+})
+
+describe('the v3 to v4 upgrade', () => {
+  it('files every existing note as unfiled and keeps its body', async () => {
+    const before = new Dexie(V3_NAME)
+    before.version(1).stores({ notes: V1_STORES })
+    before.version(2).stores({ notes: V2_STORES })
+    before.version(3).stores({ meta: 'key' })
+    await before.open()
+    await before.table('notes').bulkAdd([
+      {
+        ...v1Note('a', 'Diskrétna matematika', '# Množiny\n\nrelácie'),
+        searchText: 'diskretna matematika # mnoziny relacie',
+      },
+      {
+        ...v1Note('b', 'Zmazaná', 'text', '2026-07-02T10:00:00.000Z'),
+        searchText: 'zmazana text',
+      },
+    ])
+    await before.table('meta').put({ key: 'syncCursor', value: 42 })
+    expect(before.verno).toBe(3)
+    before.close()
+
+    const after = new Dexie(V3_NAME)
+    declareSchema(after)
+    await after.open()
+
+    expect(after.verno).toBe(4)
+    const rows = after.table<Note>('notes')
+    expect(await rows.count()).toBe(2)
+
+    const upgraded = await rows.get('a')
+    // Unfiled, which is correct and needs no guessing: there is no notebook
+    // on this device that a note written before notebooks existed belongs to.
+    expect(upgraded?.notebookId).toBeNull()
+    expect(upgraded?.title).toBe('Diskrétna matematika')
+    expect(upgraded?.bodyMd).toBe('# Množiny\n\nrelácie')
+    expect(upgraded?.searchText).toBe('diskretna matematika # mnoziny relacie')
+    expect(upgraded?.createdAt).toBe('2026-07-01T10:00:00.000Z')
+    expect(upgraded?.dirty).toBe(true)
+
+    // A deleted note is backfilled too: a restore brings it back and it
+    // would otherwise come back with notebookId undefined.
+    const deleted = await rows.get('b')
+    expect(deleted?.notebookId).toBeNull()
+    expect(deleted?.deletedAt).toBe('2026-07-02T10:00:00.000Z')
+
+    // The cursor survives. Losing it would make the next pull re-download
+    // the whole history and overwrite these rows with the server's copies.
+    const meta = after.table<{ key: string; value: number }>('meta')
+    expect((await meta.get('syncCursor'))?.value).toBe(42)
+
+    // The new stores are empty and usable, not absent.
+    expect(await after.table('classes').count()).toBe(0)
+    expect(await after.table('notebooks').count()).toBe(0)
 
     after.close()
   })

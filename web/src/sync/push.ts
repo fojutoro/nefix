@@ -19,6 +19,7 @@ let running = false
 const toWire = (note: Note): PushNote => ({
   id: note.id,
   class_id: note.classId,
+  notebook_id: note.notebookId,
   title: note.title,
   body_md: note.bodyMd,
   visibility: note.visibility,
@@ -34,6 +35,7 @@ const toWire = (note: Note): PushNote => ({
 export const fromWire = (server: WireNote): Note => ({
   id: server.id,
   classId: server.class_id,
+  notebookId: server.notebook_id,
   title: server.title,
   bodyMd: server.body_md,
   searchText: searchTextOf(server.title, server.body_md),

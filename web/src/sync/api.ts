@@ -29,6 +29,7 @@ export type Visibility = 'private' | 'faculty' | 'public'
 export type PushNote = {
   id: string
   class_id: string | null
+  notebook_id: string | null
   title: string
   body_md: string
   visibility: Visibility

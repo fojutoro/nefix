@@ -10,6 +10,7 @@ import { syncState } from './state.ts'
 const wire = (note: Note, over: Partial<WireNote> = {}): WireNote => ({
   id: note.id,
   class_id: note.classId,
+  notebook_id: note.notebookId,
   title: note.title,
   body_md: note.bodyMd,
   visibility: note.visibility,
@@ -162,6 +163,7 @@ describe('pushDirtyNotes', () => {
       Array.from({ length: 101 }, (_, index) => ({
         id: `0192f0a1-3c4d-7e8f-9a0b-${String(index).padStart(12, '0')}`,
         classId: null,
+  notebookId: null,
         title: `note ${index}`,
         bodyMd: '',
         searchText: `note ${index}`,
