@@ -66,6 +66,18 @@ original id is overwritten by the server's copy, clean. There is no dialog,
 no merge and no discard, which is what makes "a sync conflict becomes a fork"
 a rule the code can follow without ever asking the user a question.
 
+`sync/index.ts` runs one cycle on those same triggers: push, then pull, then
+refresh the list if anything moved. Pushing first is not a preference — pull
+first and the server's copy overwrites a note holding unpushed edits, which
+are then gone with no conflict ever detected, whereas a pushed edit is either
+accepted or reported as a conflict and forked. `sync/pull.ts` asks
+`GET /api/v1/sync/pull` for everything above the `syncCursor` row in Dexie's
+`meta` store, pages until `has_more` is false or twenty pages have gone by,
+and writes each page and its new cursor in one transaction, skipping any note
+that is still dirty; the cursor moves only after the page it describes is
+stored, because a cursor past a note that was never written means nothing
+asks for that note again.
+
 ## Local schema
 
 Search is diacritic-insensitive because a Slovak user types `diskretna`

@@ -62,18 +62,21 @@ export type PushResponse = {
   results: PushResult[]
 }
 
-export async function push(notes: PushNote[]): Promise<PushResponse> {
+export type PullResponse = {
+  notes: WireNote[]
+  // The highest seq in the page, or the `since` that was sent when the page
+  // is empty. An empty pull must not rewind a client to the start.
+  cursor: number
+  has_more: boolean
+}
+
+async function send(path: string, init?: RequestInit): Promise<unknown> {
   let response: Response
   // Only the transport is guarded. fetch rejects when the request never
   // arrived; every HTTP status resolves, so a 500 read as "offline" would
   // have the UI blame the network for the server.
   try {
-    response = await fetch('/api/v1/sync/push', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ notes }),
-    })
+    response = await fetch(path, { credentials: 'include', ...init })
   } catch (error) {
     throw new OfflineError(
       error instanceof Error ? error.message : 'network unreachable',
@@ -90,5 +93,24 @@ export async function push(notes: PushNote[]): Promise<PushResponse> {
     throw new ServerError(response.status, message)
   }
 
-  return (await response.json()) as PushResponse
+  return await response.json()
+}
+
+export async function push(notes: PushNote[]): Promise<PushResponse> {
+  return (await send('/api/v1/sync/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes }),
+  })) as PushResponse
+}
+
+export async function pull(
+  since: number,
+  limit: number,
+): Promise<PullResponse> {
+  const query = new URLSearchParams({
+    since: String(since),
+    limit: String(limit),
+  })
+  return (await send(`/api/v1/sync/pull?${query}`)) as PullResponse
 }

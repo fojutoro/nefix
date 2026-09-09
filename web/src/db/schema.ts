@@ -31,6 +31,14 @@ export type Note = {
   syncedAt: string | null
 }
 
+// A key/value row. The sync cursor lives here and not in localStorage: it
+// describes the notes in this database, so clearing one without the other
+// would leave the client believing it holds notes it does not have.
+export type Meta = {
+  key: string
+  value: number | string
+}
+
 export const searchTextOf = (title: string, bodyMd: string): string =>
   normalize(`${title} ${bodyMd}`)
 
@@ -60,10 +68,17 @@ export function declareSchema(db: Dexie): void {
           note.searchText = searchTextOf(note.title, note.bodyMd)
         }),
     )
+
+  // Only the new store is declared. Dexie treats a version's stores as a
+  // delta, so `notes` keeps the schema and the rows v2 left it with, and no
+  // upgrade function is needed: a missing cursor row reads as 0, which is
+  // what a device that has never pulled should send.
+  db.version(3).stores({ meta: 'key' })
 }
 
 export const db = new Dexie('nefix') as Dexie & {
   notes: EntityTable<Note, 'id'>
+  meta: EntityTable<Meta, 'key'>
 }
 
 declareSchema(db)
