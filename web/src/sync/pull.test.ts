@@ -8,6 +8,7 @@ import { pullRemoteChanges } from './pull.ts'
 const remote = (over: Partial<WireNote> = {}): WireNote => ({
   id: '0192f0a1-3c4d-7e8f-9a0b-1c2d3e4f5a6b',
   class_id: null,
+  notebook_id: null,
   title: 'Diskrétna matematika',
   body_md: '# Množiny',
   visibility: 'private',

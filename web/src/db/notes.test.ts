@@ -33,6 +33,7 @@ describe('createNote', () => {
       title: '',
       bodyMd: '',
       classId: null,
+      notebookId: null,
       visibility: 'private',
       deletedAt: null,
       forkedFromId: null,
@@ -58,6 +59,37 @@ describe('listNotes', () => {
       first.id,
     ])
     expect(await countNotes()).toBe(2)
+  })
+})
+
+describe('listNotes with a notebook', () => {
+  it('filters by notebook and reaches the unfiled notes with null', async () => {
+    const lectures = await createNote({ title: 'lectures', notebookId: 'nb-1' })
+    await tick()
+    const seminars = await createNote({ title: 'seminars', notebookId: 'nb-2' })
+    await tick()
+    const unfiled = await createNote({ title: 'unfiled' })
+
+    // undefined is every note, a string is that notebook, and null is the
+    // unfiled ones: the argument is the value being matched, so there is no
+    // sentinel to remember and no fourth function to keep in step.
+    expect((await listNotes()).map((note) => note.id)).toEqual([
+      unfiled.id,
+      seminars.id,
+      lectures.id,
+    ])
+    expect((await listNotes('nb-1')).map((note) => note.id)).toEqual([
+      lectures.id,
+    ])
+    expect((await listNotes(null)).map((note) => note.id)).toEqual([unfiled.id])
+  })
+
+  it('excludes deleted notes from a notebook listing', async () => {
+    const kept = await createNote({ title: 'kept', notebookId: 'nb-1' })
+    const gone = await createNote({ title: 'gone', notebookId: 'nb-1' })
+    await deleteNote(gone.id)
+
+    expect((await listNotes('nb-1')).map((note) => note.id)).toEqual([kept.id])
   })
 })
 

@@ -18,6 +18,7 @@ const ID = '0199a0f0-0000-7000-8000-000000000001'
 const row = (bodyMd: string, dirty: boolean): Note => ({
   id: ID,
   classId: null,
+  notebookId: null,
   title: 'Diskrétna matematika',
   bodyMd,
   searchText: '',
