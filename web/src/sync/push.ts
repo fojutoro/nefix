@@ -2,14 +2,12 @@ import { db, searchTextOf, type Note } from '../db/schema.ts'
 import { uuidv7 } from '../db/uuid.ts'
 import i18n from '../i18n/index.ts'
 import {
-  OfflineError,
-  UnauthenticatedError,
   push,
   type PushNote,
   type PushResult,
   type WireNote,
 } from './api.ts'
-import { syncState, type PushSummary, type SyncStatus } from './state.ts'
+import { statusFor, syncState, type PushSummary } from './state.ts'
 
 // The server answers a larger batch with 413.
 const BATCH = 100
@@ -30,7 +28,10 @@ const toWire = (note: Note): PushNote => ({
   deleted_at: note.deletedAt,
 })
 
-const fromWire = (server: WireNote): Note => ({
+// Shared with the pull path. Both halves write the server's copy into a
+// local row, and there has to be exactly one function doing it or the two
+// drift apart on the next field either of them gains.
+export const fromWire = (server: WireNote): Note => ({
   id: server.id,
   classId: server.class_id,
   title: server.title,
@@ -107,14 +108,6 @@ async function applyResult(
     console.warn(`sync: the server refuses note ${sent.id} as another user's`)
     summary.forbidden += 1
   }
-}
-
-function statusFor(error: unknown): SyncStatus {
-  if (error instanceof OfflineError) return 'offline'
-  // The queue simply stops draining until they sign in again. Nothing is
-  // cleared, nothing redirects, and someone mid-sentence sees no change.
-  if (error instanceof UnauthenticatedError) return 'unauthenticated'
-  return 'error'
 }
 
 export async function pushDirtyNotes(): Promise<PushSummary> {

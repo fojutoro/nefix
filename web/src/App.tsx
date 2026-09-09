@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createNote, deleteNote, updateNote } from './db/notes.ts'
 import type { Note } from './db/schema.ts'
@@ -6,7 +6,7 @@ import Editor from './features/notes/Editor.tsx'
 import NoteList from './features/notes/NoteList.tsx'
 import { searchNotes } from './features/notes/search.ts'
 import { useAutosave } from './features/notes/useAutosave.ts'
-import { pushDirtyNotes } from './sync/push.ts'
+import { sync as runSync } from './sync/index.ts'
 import { useSyncState } from './sync/state.ts'
 
 // Coarse on purpose: the line re-renders when a sync ends, not on a timer, so
@@ -31,6 +31,14 @@ export default function App() {
 
   const refresh = useCallback(() => searchNotes(query).then(setNotes), [query])
 
+  // Held in a ref so the sync effect below keeps stable dependencies. Reading
+  // `refresh` directly would restart the 30-second timer on every keystroke
+  // in the search box.
+  const refreshRef = useRef(refresh)
+  useEffect(() => {
+    refreshRef.current = refresh
+  }, [refresh])
+
   useEffect(() => {
     void refresh()
   }, [refresh])
@@ -48,10 +56,15 @@ export default function App() {
     }
   }, [])
 
-  // The queue drains on a timer, never on input: pushing per keystroke would
+  // The cycle runs on a timer, never on input: pushing per keystroke would
   // send a note once per character and conflict it against itself.
   useEffect(() => {
-    const drain = () => void pushDirtyNotes()
+    const drain = () =>
+      void runSync().then((summary) => {
+        // A pull that lands notes the list never shows is, to the user, a
+        // pull that did not happen.
+        if (summary.changed) return refreshRef.current()
+      })
     drain()
     const timer = setInterval(() => {
       if (navigator.onLine) drain()
