@@ -3,6 +3,7 @@ import { EditorView, minimalSetup } from 'codemirror'
 import { Annotation } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
 import { observeNote } from '../../db/notes.ts'
+import { mathExtension } from './mathExtension.ts'
 
 // Marks a transaction as carrying a body that arrived from sync. Without it
 // the update listener below reports the server's own text back as something
@@ -39,6 +40,7 @@ export default function Editor({ noteId, initialBody, label, onChange }: Props) 
         // minimalSetup, not basicSetup: no line numbers, no fold gutter.
         minimalSetup,
         markdown(),
+        mathExtension,
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ 'aria-label': latest.current.label }),
         EditorView.updateListener.of((update) => {

@@ -56,6 +56,13 @@ when the page is hidden, because mobile Safari cannot be trusted to fire
 `beforeunload`. Each write derives the title from the first line of the
 body and goes to IndexedDB through `db/notes.ts`, never to the network.
 
+Math is rendered in place rather than in a preview pane: `notes/math.ts` finds
+`$…$` and `$$…$$` in the body, ignoring code spans and fenced blocks, and
+`notes/mathExtension.ts` replaces each range with a KaTeX widget. The formula
+the cursor is inside stays source, because a split preview halves the writing
+space on the laptop this gets used on and a formula you cannot see is not one
+you can edit.
+
 `sync/push.ts` drains every note with `dirty` set to `POST /api/v1/sync/push`
 in batches of 100, on mount, on `online`, on a 30-second timer and when the
 page is hidden — on a timer rather than on input, so a note is not sent once
