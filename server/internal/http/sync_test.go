@@ -317,8 +317,8 @@ func TestPushRejectsAnOversizedBatch(t *testing.T) {
 	api := newAPI(t)
 	cookie := signUp(t, api, "jozef", "jozef@example.sk")
 
-	notes := make([]map[string]any, 0, maxPushNotes+1)
-	for i := 1; i <= maxPushNotes+1; i++ {
+	notes := make([]map[string]any, 0, maxPushRows+1)
+	for i := 1; i <= maxPushRows+1; i++ {
 		notes = append(notes, notePayload(syncID(i), 0))
 	}
 
