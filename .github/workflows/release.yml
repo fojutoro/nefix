@@ -18,6 +18,15 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      # .goreleaser.yml runs `make dist` as a before-hook, which builds the
+      # frontend — so a release build needs Node, not just Go.
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make web-install
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: v2.17.1
