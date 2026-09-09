@@ -14,9 +14,14 @@ var (
 )
 
 type Note struct {
-	ID           string
-	AuthorID     int64
-	ClassID      *int64
+	ID       string
+	AuthorID int64
+	// Vestigial. Superseded by NotebookID and never written from here on; the
+	// column is dropped in a later release, once no deployed code reads it.
+	ClassID *int64
+	// Nil is an unfiled note, which is a real case and must not require
+	// setting up a class first.
+	NotebookID   *string
 	Title        string
 	BodyMd       string
 	Visibility   string
@@ -34,6 +39,7 @@ type Note struct {
 type NoteInput struct {
 	ID           string
 	ClassID      *int64
+	NotebookID   *string
 	Title        string
 	BodyMd       string
 	Visibility   string
@@ -42,7 +48,7 @@ type NoteInput struct {
 	DeletedAt    *time.Time
 }
 
-const noteColumns = `id, author_id, class_id, title, body_md, visibility,
+const noteColumns = `id, author_id, class_id, notebook_id, title, body_md, visibility,
 	forked_from_id, version, seq, created_at, updated_at, deleted_at`
 
 // Satisfied by both *sql.Row and *sql.Rows, so one scan serves the single
@@ -56,7 +62,7 @@ func scanNote(r row) (*Note, error) {
 	var createdAt, updatedAt string
 	var deletedAt sql.NullString
 
-	err := r.Scan(&n.ID, &n.AuthorID, &n.ClassID, &n.Title, &n.BodyMd, &n.Visibility,
+	err := r.Scan(&n.ID, &n.AuthorID, &n.ClassID, &n.NotebookID, &n.Title, &n.BodyMd, &n.Visibility,
 		&n.ForkedFromID, &n.Version, &n.Seq, &createdAt, &updatedAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -145,18 +151,18 @@ func (db *DB) UpsertNote(ctx context.Context, userID int64, in NoteInput) (*Note
 
 	if existing == nil {
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO notes (id, author_id, class_id, title, body_md, visibility,
+			`INSERT INTO notes (id, author_id, class_id, notebook_id, title, body_md, visibility,
 				forked_from_id, version, seq, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-			in.ID, userID, in.ClassID, in.Title, in.BodyMd, in.Visibility,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			in.ID, userID, in.ClassID, in.NotebookID, in.Title, in.BodyMd, in.Visibility,
 			in.ForkedFromID, seq, nullTime(in.DeletedAt))
 	} else {
 		_, err = tx.ExecContext(ctx,
-			`UPDATE notes SET class_id = ?, title = ?, body_md = ?, visibility = ?,
+			`UPDATE notes SET class_id = ?, notebook_id = ?, title = ?, body_md = ?, visibility = ?,
 				forked_from_id = ?, version = version + 1, seq = ?,
 				updated_at = datetime('now'), deleted_at = ?
 			WHERE id = ?`,
-			in.ClassID, in.Title, in.BodyMd, in.Visibility,
+			in.ClassID, in.NotebookID, in.Title, in.BodyMd, in.Visibility,
 			in.ForkedFromID, seq, nullTime(in.DeletedAt), in.ID)
 	}
 	if err != nil {
