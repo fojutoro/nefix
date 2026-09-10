@@ -17,7 +17,9 @@ const fromSync = Annotation.define<boolean>()
 // there means outspecifying a theme that reattaches on every reconfigure.
 // The values are read back out of the palette so it stays the one source.
 const theme = EditorView.theme({
-  '&': { backgroundColor: 'var(--bg)', color: 'var(--text)' },
+  // Transparent, not --bg: the ruled paper is painted on the scroll container
+  // behind this, and an opaque editor would cover it.
+  '&': { backgroundColor: 'transparent', color: 'var(--text)' },
   '.cm-content': { caretColor: 'var(--text)' },
   // A 1px hairline in the default grey was the cursor that could not be found.
   '&.cm-focused .cm-cursor': {
@@ -33,18 +35,28 @@ type Props = {
   noteId: string
   initialBody: string
   label: string
+  // Set for a note that was just created, so `n` lands the cursor in it.
+  // Taking focus on every note switch would pull it off the row that was
+  // clicked, which is not the same thing at all.
+  focus: boolean
   onChange: (bodyMd: string) => void
 }
 
-export default function Editor({ noteId, initialBody, label, onChange }: Props) {
+export default function Editor({
+  noteId,
+  initialBody,
+  label,
+  focus,
+  onChange,
+}: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
-  const latest = useRef({ initialBody, label, onChange })
+  const latest = useRef({ initialBody, label, focus, onChange })
 
   // Declared before the view effect so that on mount it runs first, and on a
   // note switch it has the new note's body ready for the rebuilt view.
   useEffect(() => {
-    latest.current = { initialBody, label, onChange }
+    latest.current = { initialBody, label, focus, onChange }
   })
 
   useEffect(() => {
@@ -71,6 +83,7 @@ export default function Editor({ noteId, initialBody, label, onChange }: Props) 
       ],
     })
     view.current = created
+    if (latest.current.focus) created.focus()
     return () => {
       created.destroy()
       view.current = null

@@ -52,6 +52,7 @@ async function open(bodyMd: string, dirty: boolean) {
       noteId={ID}
       initialBody={bodyMd}
       label="Note body, Markdown"
+      focus={false}
       onChange={onChange}
     />,
   )

@@ -4,7 +4,6 @@
    different palette on every machine, no contrast ratio could be checked
    because no colour was known, and anything the browser painted for itself —
    a caret, a selection, a native control — was never in the scheme at all.
-   The unreadable cursor was one symptom of that, not the whole of it.
    Naming the roles here is what makes a later dark mode a change of values. */
 :root {
   color-scheme: light;
@@ -20,21 +19,54 @@
      every separator heavier for the sake of the form fields. */
   --border-input: #8b8170;
   --accent: #9b1c2e;
-  /* Errors and destructive actions. Deliberately unused for now: it is here so
-     that the class-delete confirmation and the sync error state have a colour
-     to reach for that the crimson accent has not already spent. */
   --danger: #c2410c;
   --selection: #f2c879;
+  /* The menu panel's shadow, which is the only thing that floats. */
+  --lift-hover: rgba(26, 25, 23, 0.13);
   /* Hover fill. On cream there is too little contrast for a border change
      alone to register as feedback. */
   --raised: #f0e9dd;
+  /* The printed margin rule of a Slovak exercise book. Crimson in the content
+     pane, where it is the signature; stepped back in the rail, which is
+     furniture and should not compete with the page. */
+  /* The one red vertical line on the screen. One reads as a margin; two read
+     as a table. */
+  --rule: #c9536a;
 
-  accent-color: var(--accent);
+  /* Five sizes, and there is no sixth anywhere in this file. Two sizes with
+     nothing between them is why nothing grouped: a card title had to be
+     either a heading or body text, and it is neither. */
+  --display: 2.125rem;
+  --title: 1.1875rem;
+  --body: 0.9375rem;
+  --small: 0.8125rem;
+  --meta: 0.6875rem;
+
+  /* Paper. The card sits a shade above the page it is on, and the ruling is
+     3.39% darker than the page — 1.0351:1, which you see only if you look
+     for it. */
+  --card: #fffdf8;
+  --ruling: #f7f2e9;
+  /* The ruled line pitch, and the card grid's rhythm with it. */
+  --line: 1.625rem;
+
+  /* 8px, and every measurement in this file is a multiple of it. */
+  --gap: 0.5rem;
+
+  /* The margin rule sits here, measured from the left edge of its pane, and
+     content clears it. */
+  --margin: 2.75rem;
+
+  /* One transition, used for one thing: content replacing content. */
+  --fade: 120ms;
+
+  font-size: var(--body);
 }
 
 body {
   background: var(--bg);
   color: var(--text);
+  font-size: var(--body);
   margin: 0;
 }
 
@@ -48,18 +80,29 @@ body {
   opacity: 1;
 }
 
+/* Paper does not have rounded corners. 2px is the whole radius budget, and it
+   is spent only where a control has to read as pressable. */
 button {
   background: none;
   border: 1px solid var(--border-input);
-  border-radius: 0.375rem;
+  border-radius: 2px;
   color: inherit;
   cursor: pointer;
   font: inherit;
-  padding: 0.375rem 0.75rem;
+  padding: var(--gap) calc(var(--gap) * 1.5);
 }
 
 button:hover {
   background: var(--raised);
+}
+
+input {
+  background: var(--bg);
+  border: 1px solid var(--border-input);
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  padding: var(--gap);
 }
 
 /* Chrome paints an autofilled field with a background and a text colour of its
@@ -73,179 +116,616 @@ input:-webkit-autofill:focus {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--text);
   outline-offset: 2px;
 }
 
-.app {
-  display: grid;
-  grid-template-columns: minmax(14rem, 20rem) 1fr;
-  height: 100dvh;
+/* Labels look like labels. Small, tracked wide, muted, and never in the same
+   size as the thing they label. */
+.meta {
+  color: var(--text-muted);
+  font-size: var(--meta);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.side {
+/* Two panes. The rail is the only navigation; everything else is content. */
+.app {
+  display: grid;
+  grid-template-columns: var(--rail, 240px) 1fr;
+  height: 100dvh;
+  position: relative;
+}
+
+.rail {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  padding-top: calc(var(--gap) * 2);
+  position: relative;
 }
 
-.list {
+.rail-handle {
+  bottom: 0;
+  cursor: col-resize;
+  left: calc(var(--rail, 240px) - 3px);
+  position: absolute;
+  top: 0;
+  width: 6px;
+  z-index: 2;
+}
+
+.rail-handle:hover {
+  background: var(--border);
+}
+
+.rail-nav {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  position: relative;
 }
 
-.list-head {
+.rail-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* The groups are named rather than ruled apart. A tracked label reads as a
+   label and does not compete with the class names under it. */
+.rail-label {
+  color: var(--text-muted);
+  font-size: var(--meta);
+  letter-spacing: 0.08em;
+  margin: calc(var(--gap) * 3) 0 var(--gap);
+  padding: 0 calc(var(--gap) * 3);
+  text-transform: uppercase;
+}
+
+.rail-rest {
+  margin-top: calc(var(--gap) * 3);
+}
+
+/* Today, Unfiled and Archived are ways in, not subjects. Set like labels so
+   they cannot be mistaken for the heading of the rail. */
+.rail-shortcut {
+  color: var(--text-muted);
+  font-size: var(--meta);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rail-row {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  display: flex;
+  gap: var(--gap);
+  padding: calc(var(--gap) * 1.5) calc(var(--gap) * 2) calc(var(--gap) * 1.5)
+    calc(var(--gap) * 3);
+  position: relative;
+  text-align: start;
+  width: 100%;
+}
+
+/* The spine: books on a shelf, in the class's own colour. */
+.rail-row::before {
+  background: var(--spine, transparent);
+  bottom: 0;
+  content: '';
+  left: 0;
+  position: absolute;
+  top: 0;
+  width: 3px;
+}
+
+/* The selected row is heavier and its spine is thicker, so it is not colour
+   alone. The class's own colour when it has one, crimson when it does not. */
+.rail-row[aria-current='true'] {
+  font-weight: 600;
+}
+
+.rail-row[aria-current='true']::before {
+  background: var(--spine, var(--accent));
+  width: 5px;
+}
+
+.rail-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-when {
+  color: var(--text-muted);
+  font-size: var(--meta);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+
+.rail-new,
+.language,
+.side-actions button {
+  border: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: var(--meta);
+  letter-spacing: 0.08em;
+  padding: var(--gap) 0;
+  text-align: start;
+  text-transform: uppercase;
+}
+
+.rail-new {
+  margin-top: calc(var(--gap) * 2);
+  padding: var(--gap) calc(var(--gap) * 3);
+}
+
+.rail-create {
+  display: flex;
+  padding: var(--gap) calc(var(--gap) * 2) var(--gap) calc(var(--gap) * 3);
+}
+
+.rail-create input {
+  flex: 1;
+  min-width: 0;
+}
+
+.offline {
+  color: var(--text-muted);
+  font-size: var(--meta);
+  margin: 0;
+  padding: calc(var(--gap) * 2) calc(var(--gap) * 3) var(--gap);
+}
+
+.side-actions {
+  display: flex;
+  gap: calc(var(--gap) * 2);
+  padding: 0 calc(var(--gap) * 2) calc(var(--gap) * 2) calc(var(--gap) * 3);
+}
+
+.banner {
+  border: 1px solid var(--border);
+  display: grid;
+  gap: var(--gap);
+  justify-items: start;
+  margin: 0 calc(var(--gap) * 2) 0 calc(var(--gap) * 3);
+  padding: var(--gap);
+}
+
+/* The content pane, and the rule that makes this a notebook rather than a web
+   app. Behind everything, full height, one pseudo-element. */
+.content {
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+.content::before {
+  background: var(--rule);
+  bottom: 0;
+  content: '';
+  left: var(--margin);
+  position: absolute;
+  top: 0;
+  width: 1px;
+  z-index: 0;
+}
+
+/* The one piece of motion in the interface: content replacing content. It is
+   armed only after something has been on screen, so nothing animates on load. */
+.content[data-fade='true'] {
+  animation: fade var(--fade) ease-out;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Ruled paper, on the page and not in the editor: a rendered formula is
+   taller than a text line, so the ruling would drift out of alignment from
+   the first $…$ onward — wrong exactly where the notes get interesting. */
+.page {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--line) - 1px),
+    var(--ruling) calc(var(--line) - 1px),
+    var(--ruling) var(--line)
+  );
+  padding: calc(var(--gap) * 4) calc(var(--gap) * 4) calc(var(--gap) * 6)
+    calc(var(--margin) + var(--gap) * 3);
+  position: relative;
+}
+
+/* Generous between sections, tight within them: the head owns a block of air
+   and the state line sits right under the name it is about. */
+.page-head {
+  align-items: baseline;
+  display: flex;
+  gap: calc(var(--gap) * 2);
+  justify-content: space-between;
+  margin-bottom: calc(var(--gap) * 5);
+}
+
+/* The loudest thing on the page, because it is what you came for. */
+.page-head h1 {
+  font-size: var(--display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+/* The name is a control, and it may not look like one until it is reached
+   for: a heading with a button's border is not a heading. */
+.page-head h1 button {
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  padding: 0;
+  text-align: start;
+}
+
+.page-head h1 button:hover {
+  background: none;
+  box-shadow: inset 0 -1px 0 var(--border-input);
+}
+
+/* Two lines, then it stops. The rail truncates because it is 240px wide; the
+   page has room to say the whole name. */
+.page-head h1 button,
+.page-head h1 {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.page-head h1 input {
+  font: inherit;
+  letter-spacing: inherit;
+  width: 100%;
+}
+
+.page-title {
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.page-controls {
   align-items: center;
   display: flex;
-  gap: 1rem;
-  justify-content: space-between;
-  padding: 1rem;
+  flex: none;
+  gap: var(--gap);
 }
 
-.list-head h1 {
-  font-size: 1.125rem;
+/* The code is a label, so it is label-shaped even while it is a button. */
+.page-controls > button,
+.page-controls form {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: var(--text-muted);
+  padding: var(--gap) 0;
+}
+
+.page-controls > button:hover {
+  background: none;
+  color: var(--text);
+}
+
+.menu {
+  position: relative;
+}
+
+.menu-open {
+  border: 0;
+  color: var(--text-muted);
+  line-height: 1;
+  padding: 0 var(--gap);
+}
+
+.menu-panel {
+  background: var(--card);
+  box-shadow: 0 2px 12px var(--lift-hover);
+  display: grid;
+  gap: 2px;
+  justify-items: stretch;
+  padding: var(--gap);
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--gap));
+  width: 12rem;
+  z-index: 4;
+}
+
+.menu-panel .meta {
+  margin: var(--gap) 0 2px;
+}
+
+.menu-item,
+.menu-panel form {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: calc(var(--gap) * 0.75) var(--gap);
+  text-align: start;
+  width: 100%;
+}
+
+.menu-item:hover {
+  background: var(--raised);
+}
+
+.menu-danger {
+  color: var(--danger);
+}
+
+.swatches {
+  display: flex;
+  gap: var(--gap);
+  padding: 2px var(--gap) var(--gap);
+}
+
+.swatch {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  height: 1.25rem;
+  padding: 0;
+  width: 1.25rem;
+}
+
+.swatch[aria-current='true'] {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--text);
+}
+
+/* Marks in a margin rather than a progress bar: narrow, tall, and standing on
+   a baseline. */
+.strip {
+  margin-bottom: calc(var(--gap) * 5);
+  width: 13rem;
+}
+
+.strip ul {
+  display: grid;
+  gap: 0.375rem;
+  grid-template-columns: repeat(14, 0.5rem);
+  list-style: none;
   margin: 0;
+  padding: 0;
+}
+
+/* An empty week is absence, which is the whole point of the strip, so it is
+   a hairline and not a grey box. */
+.strip li {
+  border-bottom: 1px solid var(--border);
+  height: calc(var(--gap) * 4);
+}
+
+.strip li:not([data-weight='0']) {
+  background: var(--accent);
+  border-bottom-color: transparent;
+}
+
+/* How much, not only whether: one note is faint, five or more is full. */
+.strip li[data-weight='1'] {
+  opacity: 0.28;
+}
+
+.strip li[data-weight='2'] {
+  opacity: 0.5;
+}
+
+.strip li[data-weight='3'] {
+  opacity: 0.72;
+}
+
+.strip-scale {
+  color: var(--text-muted);
+  display: flex;
+  font-size: var(--meta);
+  justify-content: space-between;
+  letter-spacing: 0.08em;
+  margin: var(--gap) 0 0;
+  text-transform: uppercase;
+}
+
+.page-tools {
+  align-items: baseline;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: calc(var(--gap) * 2);
+  justify-content: space-between;
+  padding-top: calc(var(--gap) * 3);
 }
 
 .search {
   display: flex;
-  gap: 0.5rem;
-  padding: 0 1rem 0.5rem;
+  gap: var(--gap);
 }
 
 .search input {
-  background: var(--bg);
-  border: 1px solid var(--border-input);
-  border-radius: 0.375rem;
-  color: inherit;
-  flex: 1;
-  font: inherit;
   min-width: 0;
-  padding: 0.375rem 0.5rem;
+  width: 14rem;
 }
 
-/* Safari draws its own clear button inside a search field, and this
-   already has one that works everywhere. */
+/* Safari draws its own clear button inside a search field, and this already
+   has one that works everywhere. */
 .search input::-webkit-search-decoration,
 .search input::-webkit-search-cancel-button {
   appearance: none;
 }
 
 .clear {
+  border: 0;
   color: var(--text-muted);
-  font-size: 1.125rem;
-  line-height: 1;
-  padding: 0.25rem 0.625rem;
+  padding: 0 var(--gap);
 }
 
-.count {
+.state {
   color: var(--text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--small);
   margin: 0;
-  padding: 0 1rem 0.5rem;
 }
 
-.list ul {
+.notice {
+  align-items: baseline;
+  color: var(--text-muted);
+  display: flex;
+  font-size: var(--small);
+  gap: calc(var(--gap) * 2);
+  margin: 0 0 calc(var(--gap) * 4);
+}
+
+/* A table of contents for the subject: one line per note, the date in a
+   gutter so the dates form an edge to scan down, and the note's own headings
+   under its title. No boxes — the information is the structure. */
+.toc {
+  border-top: 1px solid var(--border);
   list-style: none;
-  margin: 0;
+  margin: calc(var(--gap) * 3) 0 0;
   padding: 0;
 }
 
-.row {
-  align-items: center;
-  border-top: 1px solid var(--border);
-  display: flex;
+.toc-row {
+  border-bottom: 1px solid var(--border);
+  position: relative;
 }
 
-.row:hover {
+.toc-open {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  column-gap: calc(var(--gap) * 3);
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  padding: calc(var(--gap) * 2) calc(var(--gap) * 5) calc(var(--gap) * 2) 0;
+  text-align: start;
+  width: 100%;
+}
+
+/* Edge to edge, and nothing else: no border, no lift, no shadow. */
+.toc-open:hover {
   background: var(--raised);
 }
 
-.open {
-  border: 0;
-  border-radius: 0;
+/* Placed rather than ordered. The title leads in the source, because that is
+   what a row should be announced as; the date is pulled into the gutter,
+   because that is what makes the list scan as a timeline. */
+.toc-when {
+  grid-column: 1;
+  grid-row: 1;
+  text-align: end;
+  white-space: nowrap;
+}
+
+.toc-body {
   display: grid;
-  flex: 1;
-  gap: 0.125rem;
+  gap: 2px;
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
-  padding: 0.625rem 1rem;
-  text-align: start;
 }
 
-.open:hover {
-  background: none;
-}
-
-/* The current note has to be identifiable without colour alone. */
-.open[aria-current='true'] {
-  box-shadow: inset 0.1875rem 0 0 var(--accent);
+.toc-title {
+  font-size: var(--title);
   font-weight: 600;
-}
-
-.row-title {
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.open time {
+.toc-outline {
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One more line in the list rather than something competing with it. */
+.toc-new .toc-title {
+  color: var(--accent);
+  font-size: var(--body);
   font-weight: 400;
 }
 
-.discard {
+.toc-discard {
   border: 0;
-  border-radius: 0;
   color: var(--text-muted);
-  font-size: 1.125rem;
-  line-height: 1;
-  padding: 0.5rem 0.75rem;
+  opacity: 0;
+  padding: 0 var(--gap);
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.toc-row:hover .toc-discard,
+.toc-discard:focus-visible {
+  opacity: 1;
 }
 
 .empty-list {
   color: var(--text-muted);
-  font-size: 0.875rem;
-  margin: 0;
-  padding: 1rem;
+  font-size: var(--small);
+  margin: calc(var(--gap) * 2) 0 0;
 }
 
-.offline {
-  border-top: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 0.8125rem;
-  margin: 0;
-  padding: 0.75rem 1rem;
+/* The editor gets the whole pane and no chrome but the way back. */
+.note {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
-.language {
+.note-head {
+  padding: calc(var(--gap) * 2) calc(var(--gap) * 2) calc(var(--gap) * 2)
+    var(--gap);
+}
+
+.back {
+  align-items: center;
   border: 0;
   border-radius: 0;
-  border-top: 1px solid var(--border);
-  font-size: 0.8125rem;
-  padding: 0.75rem 1rem;
-  text-align: start;
-}
-
-.pane {
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-}
-
-.empty {
   color: var(--text-muted);
-  margin: auto;
-  max-width: 24rem;
-  padding: 2rem;
-  text-align: center;
+  display: flex;
+  gap: var(--gap);
+  padding: var(--gap);
 }
 
+/* Ruled here too, on the container and behind the text rather than under each
+   line: a KaTeX widget is taller than a line of type, so the lines and the
+   ruling cannot stay in register. They do not need to — a ruled page with
+   text on it is the look, and `local` is what makes the ruling travel with
+   the text instead of sitting still while it scrolls. */
 .editor {
+  background-attachment: local;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent calc(var(--line) - 1px),
+    var(--ruling) calc(var(--line) - 1px),
+    var(--ruling) var(--line)
+  );
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -255,101 +735,126 @@ input:-webkit-autofill:focus {
   height: 100%;
 }
 
+/* Monospace, because this holds markdown and LaTeX, at the body size, because
+   a sixth size for one surface is how five sizes becomes eleven. */
 .editor .cm-content {
   font-family: ui-monospace, monospace;
-  font-size: 1rem;
-  line-height: 1.7;
-  margin: 0 auto;
-  max-width: 44rem;
-  padding: 2rem 1.5rem;
+  font-size: var(--body);
+  /* The ruling's pitch, so the two at least share a rhythm. */
+  line-height: var(--line);
+  /* A full-width line of monospace on a wide display is unreadable, and it is
+     why this pane looked like a blank page with a stray formula on it. Held
+     against the margin rule rather than centred: the rule is the content
+     pane's own, continuing, and centring would strand it far to the left. */
+  max-width: 68ch;
+  padding: var(--gap) calc(var(--gap) * 3) calc(var(--gap) * 8)
+    calc(var(--margin) + var(--gap) * 3);
 }
 
-/* CodeMirror draws its own focus ring, and the outer one would sit around
-   the whole scroll area rather than the text. */
+/* CodeMirror draws its own focus ring, and the outer one would sit around the
+   whole scroll area rather than the text. */
 .editor .cm-editor.cm-focused {
   outline: none;
+}
+
+.rail-toggle {
+  display: none;
 }
 
 .auth {
   margin: 0 auto;
   max-width: 22rem;
-  padding: 3rem 1.5rem;
+  padding: calc(var(--gap) * 6) calc(var(--gap) * 3);
 }
 
 .auth h1 {
-  margin-bottom: 0.25rem;
+  font-size: var(--display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--gap);
 }
 
 .auth .tagline {
   color: var(--text-muted);
-  margin-top: 0;
+  margin: 0 0 calc(var(--gap) * 4);
 }
 
 .auth form {
   display: grid;
-  gap: 0.25rem;
+  gap: 2px;
 }
 
 .auth label {
-  font-size: 0.875rem;
-  margin-top: 0.75rem;
-}
-
-.auth input {
-  background: var(--bg);
-  border: 1px solid var(--border-input);
-  border-radius: 0.375rem;
-  color: inherit;
-  font: inherit;
-  padding: 0.5rem;
+  color: var(--text-muted);
+  font-size: var(--meta);
+  letter-spacing: 0.08em;
+  margin-top: calc(var(--gap) * 2);
+  text-transform: uppercase;
 }
 
 .auth button[type='submit'] {
-  margin-top: 1.25rem;
+  margin-top: calc(var(--gap) * 3);
 }
 
 .auth-error {
-  color: inherit;
-  font-size: 0.875rem;
-  margin: 0.75rem 0 0;
+  color: var(--danger);
+  margin: calc(var(--gap) * 2) 0 0;
 }
 
 .link {
   border: 0;
-  margin-top: 1rem;
+  border-radius: 0;
+  margin-top: calc(var(--gap) * 2);
   padding-left: 0;
   text-decoration: underline;
 }
 
-.banner {
-  border: 1px solid var(--border);
-  border-radius: 0.375rem;
-  display: grid;
-  font-size: 0.875rem;
-  gap: 0.5rem;
-  justify-items: start;
-  margin: 0 0.75rem;
-  padding: 0.75rem;
-}
-
-.side-actions {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0 0.75rem 0.75rem;
-}
-
-@media (width < 700px) {
+/* The rail becomes a drawer rather than narrowing: below this width two
+   columns leave the note too little room to be written in. */
+@media (width < 900px) {
   .app {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 40%) 1fr;
   }
 
-  .side {
-    border-bottom: 1px solid var(--border);
-    border-right: 0;
+  .rail {
+    background: var(--bg);
+    bottom: 0;
+    left: 0;
+    position: fixed;
+    top: 0;
+    transform: translateX(-100%);
+    transition: transform var(--fade);
+    width: var(--rail, 240px);
+    z-index: 3;
   }
 
-  .editor .cm-content {
-    padding: 1rem;
+  .app[data-rail-open='true'] .rail {
+    transform: none;
+  }
+
+  /* Nothing to drag when the rail is a drawer. */
+  .rail-handle {
+    display: none;
+  }
+
+  .rail-toggle {
+    display: block;
+    left: var(--gap);
+    position: absolute;
+    top: var(--gap);
+  }
+
+  .page {
+    padding-top: calc(var(--gap) * 8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .content[data-fade='true'] {
+    animation: none;
+  }
+
+  .rail {
+    transition: none;
   }
 }

@@ -14,6 +14,40 @@ export const en = {
   // The notebook created with a class, so there is somewhere to type at
   // once. Renameable afterwards, so this is a starting point, not a name.
   'notebooks.general': 'General',
+  'rail.label': 'Classes',
+  // A pseudo-class, and first, because most of the time what you want is
+  // something from the last few hours.
+  'rail.today': 'Today',
+  'rail.todayEmpty': 'Nothing yet today',
+  'rail.unfiled': 'Unfiled',
+  'rail.archived': 'Archived',
+  'rail.newClass': '+ New class',
+  'rail.className': 'Class name',
+  'classes.empty': 'A class is where the notes for one subject live.',
+  'classes.addFirst': 'Add the first class',
+  'class.activity': 'Weeks written in',
+  'state.none': 'Nothing here yet',
+  'state.recent': 'Last written {{when}}',
+  'state.idle': 'Nothing here for {{when}}',
+  'rail.resize': 'Resize the rail',
+  'editor.back': 'Back to {{name}}',
+  'class.rename': 'Rename class',
+  'class.code': 'Course code',
+  'class.addCode': 'Add code',
+  'class.menu': 'Class actions',
+  'class.colour': 'Colour',
+  'class.colourOption': 'Colour {{n}}',
+  'class.semester': 'Semester',
+  'class.addSemester': 'Add semester',
+  'class.archive': 'Archive',
+  'class.archiveConfirm':
+    'Archive {{name}}? Its notes stay, under Archived.',
+  'class.delete': 'Delete',
+  'class.deleteConfirmEmpty': 'Delete {{name}}? This cannot be undone.',
+  'class.deleteConfirm_one':
+    'Delete {{name}} and its {{count}} note? This cannot be undone.',
+  'class.deleteConfirm_other':
+    'Delete {{name}} and its {{count}} notes? This cannot be undone.',
   'search.label': 'Search notes',
   'search.placeholder': 'Search',
   'search.clear': 'Clear search',
@@ -58,7 +92,7 @@ export const en = {
   'notes.deleteConfirm': 'Delete “{{title}}”? This cannot be undone.',
   'notes.count_one': '{{count}} note',
   'notes.count_other': '{{count}} notes',
-  'notes.emptyAll': 'No notes yet. Create one to start writing.',
-  'notes.emptyNone': 'Select a note, or create one.',
+  'notes.moreHeadings_one': '+{{count}} more',
+  'notes.moreHeadings_other': '+{{count}} more',
   'notes.emptySearch': 'No notes match your search.',
 }

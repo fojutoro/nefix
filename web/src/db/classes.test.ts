@@ -2,15 +2,22 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   archiveClass,
+  countNotesInClass,
   createClass,
   deleteClass,
+  deleteClassCascade,
   getClass,
   listArchivedClasses,
   listClasses,
+  readLastClassId,
+  readLastWrittenClassId,
   unarchiveClass,
   updateClass,
+  writeLastClassId,
+  writeLastWrittenClassId,
 } from './classes.ts'
-import { createNote } from './notes.ts'
+import { createNotebook, listNotebooks } from './notebooks.ts'
+import { createNote, deleteNote } from './notes.ts'
 import { db } from './schema.ts'
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 2))
@@ -19,6 +26,7 @@ beforeEach(async () => {
   await db.notes.clear()
   await db.classes.clear()
   await db.notebooks.clear()
+  await db.meta.clear()
 })
 
 describe('createClass', () => {
@@ -80,12 +88,77 @@ describe('createClass', () => {
   })
 })
 
+// Every class in this block is created with a note whose updatedAt is
+// written directly, because createNote stamps now() and four classes created
+// in one tick are indistinguishable by recency.
+async function noteIn(classId: string, updatedAt: string) {
+  const notebook = (await listNotebooks(classId))[0]!
+  const note = await createNote({ notebookId: notebook.id })
+  await db.notes.update(note.id, { updatedAt })
+  return note
+}
+
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+
 describe('listClasses', () => {
-  it('orders by name and excludes archived and deleted classes', async () => {
+  it('orders by the most recent note in the class, not by name', async () => {
+    // The two orders disagree on purpose. Alphabetically this is Analýza,
+    // Diskrétna, Lineárna, Zoológia; by recency it is Diskrétna, Lineárna,
+    // Analýza, Zoológia. A test built on classes whose alphabet already
+    // matches their recency passes against `orderBy('name')`.
+    const analysis = await createClass({ name: 'Analýza' })
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const algebra = await createClass({ name: 'Lineárna algebra' })
+    const zoology = await createClass({ name: 'Zoológia' })
+    await noteIn(analysis.id, ago(21 * 86_400_000))
+    await noteIn(discrete.id, ago(2 * 3_600_000))
+    await noteIn(algebra.id, ago(2 * 86_400_000))
+
+    expect((await listClasses()).map((c) => c.id)).toEqual([
+      discrete.id,
+      algebra.id,
+      analysis.id,
+      // Last, and with nothing to show in the column: the class exists and
+      // has to be reachable, but it has never been written in.
+      zoology.id,
+    ])
+  })
+
+  it('carries the timestamp of the most recent note, and null without one', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const zoology = await createClass({ name: 'Zoológia' })
+    const untouched = await createClass({ name: 'Fyzika' })
+    await noteIn(discrete.id, ago(3 * 86_400_000))
+    const newest = await noteIn(discrete.id, ago(2 * 3_600_000))
+    // Deleted last, so deleteNote's own updatedAt stamp is the newest in the
+    // database: counted, it would be this class's timestamp and its order.
+    const deleted = await noteIn(discrete.id, ago(60_000))
+    await deleteNote(deleted.id)
+    const zooNote = await noteIn(zoology.id, ago(5 * 86_400_000))
+
+    const rows = await listClasses()
+    const shown = (id: string) => rows.find((row) => row.id === id)!
+    expect(shown(discrete.id).latestNoteAt).toBe(
+      (await db.notes.get(newest.id))!.updatedAt,
+    )
+    // Its own note, not the newest note anywhere.
+    expect(shown(zoology.id).latestNoteAt).toBe(
+      (await db.notes.get(zooNote.id))!.updatedAt,
+    )
+    expect(shown(untouched.id).latestNoteAt).toBeNull()
+    expect(rows.map((row) => row.id)).toEqual([
+      discrete.id,
+      zoology.id,
+      untouched.id,
+    ])
+  })
+
+  it('excludes archived and deleted classes', async () => {
     const algebra = await createClass({ name: 'Lineárna algebra' })
     const discrete = await createClass({ name: 'Diskrétna matematika' })
     const old = await createClass({ name: 'Fyzika' })
     const gone = await createClass({ name: 'Zmazaný' })
+    await noteIn(discrete.id, ago(3_600_000))
     await archiveClass(old.id)
     await deleteClass(gone.id)
 
@@ -94,6 +167,65 @@ describe('listClasses', () => {
       algebra.id,
     ])
     expect((await listArchivedClasses()).map((c) => c.id)).toEqual([old.id])
+  })
+})
+
+describe('the remembered class', () => {
+  it('reads back what was written', async () => {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+
+    await writeLastClassId(created.id)
+
+    expect(await readLastClassId()).toBe(created.id)
+  })
+
+  it('answers null for a class that is not in the database', async () => {
+    await writeLastClassId('no-such-class')
+
+    expect(await readLastClassId()).toBeNull()
+  })
+
+  it('answers null for a deleted class', async () => {
+    const created = await createClass({ name: 'Zmazaný' })
+    await writeLastClassId(created.id)
+
+    await deleteClass(created.id)
+
+    expect(await readLastClassId()).toBeNull()
+  })
+
+  it('answers null for an archived class', async () => {
+    // Archived is reachable, but it is not somewhere to land on a cold start.
+    const created = await createClass({ name: 'Fyzika' })
+    await writeLastClassId(created.id)
+
+    await archiveClass(created.id)
+
+    expect(await readLastClassId()).toBeNull()
+  })
+
+  it('forgets the class when null is written', async () => {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+    await writeLastClassId(created.id)
+
+    await writeLastClassId(null)
+
+    expect(await readLastClassId()).toBeNull()
+    expect(await db.meta.get('lastClassId')).toBeUndefined()
+  })
+
+  // The same validation, because `n` reads this one on a cold start and a
+  // dangling id would put the note in a class that is not there.
+  it('validates the last written-in class the same way', async () => {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+    await writeLastWrittenClassId(created.id)
+    expect(await readLastWrittenClassId()).toBe(created.id)
+
+    await archiveClass(created.id)
+
+    expect(await readLastWrittenClassId()).toBeNull()
+    // Two separate keys: selecting Today may not forget where to write.
+    expect(await readLastClassId()).toBeNull()
   })
 })
 
@@ -168,5 +300,111 @@ describe('deleteClass', () => {
     const row = await db.classes.get(created.id)
     expect(row?.deletedAt).not.toBeNull()
     expect(row?.dirty).toBe(true)
+  })
+})
+
+describe('countNotesInClass', () => {
+  it('counts the live notes across every notebook of the class', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const other = await createClass({ name: 'Zoológia' })
+    const second = await createNotebook('Cvičenia', discrete.id)
+    await noteIn(discrete.id, ago(0))
+    await noteIn(discrete.id, ago(0))
+    const note = await createNote({ notebookId: second.id })
+    // Neither a deleted note nor another class's note is in this count, and
+    // the number goes into a sentence asking for consent to destroy them.
+    const gone = await noteIn(discrete.id, ago(0))
+    await deleteNote(gone.id)
+    await noteIn(other.id, ago(0))
+
+    expect(await countNotesInClass(discrete.id)).toBe(3)
+    expect(note.notebookId).toBe(second.id)
+    expect(await countNotesInClass(other.id)).toBe(1)
+  })
+
+  it('counts nothing for a class that has never been written in', async () => {
+    const created = await createClass({ name: 'Zoológia' })
+
+    expect(await countNotesInClass(created.id)).toBe(0)
+  })
+})
+
+describe('deleteClassCascade', () => {
+  it('soft-deletes the class, its notebooks and its notes, all dirty', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const second = await createNotebook('Cvičenia', discrete.id)
+    const first = await noteIn(discrete.id, ago(0))
+    const inSecond = await createNote({ notebookId: second.id })
+    const other = await createClass({ name: 'Zoológia' })
+    const elsewhere = await noteIn(other.id, ago(0))
+    // Clean to start with, so `dirty` below is this call's work and not the
+    // leftover flag from creating the fixture.
+    await db.classes.toCollection().modify({ dirty: false })
+    await db.notebooks.toCollection().modify({ dirty: false })
+    await db.notes.toCollection().modify({ dirty: false })
+    await tick()
+
+    await deleteClassCascade(discrete.id)
+
+    // The class.
+    const row = await db.classes.get(discrete.id)
+    expect(row?.deletedAt).not.toBeNull()
+    expect(row?.dirty).toBe(true)
+    expect(await getClass(discrete.id)).toBeUndefined()
+
+    // Both notebooks, the general one and the one added later.
+    const notebooks = await db.notebooks
+      .where('classId')
+      .equals(discrete.id)
+      .toArray()
+    expect(notebooks).toHaveLength(2)
+    for (const notebook of notebooks) {
+      expect(notebook.deletedAt).not.toBeNull()
+      expect(notebook.dirty).toBe(true)
+    }
+
+    // And the notes, which are the rows that would otherwise be orphans:
+    // invisible on this device and back the moment the server is asked.
+    for (const id of [first.id, inSecond.id]) {
+      const note = await db.notes.get(id)
+      expect(note?.deletedAt).not.toBeNull()
+      expect(note?.dirty).toBe(true)
+      expect(note!.updatedAt > first.updatedAt).toBe(true)
+    }
+
+    // Nothing outside the class is touched.
+    expect(await db.notes.get(elsewhere.id)).toMatchObject({
+      deletedAt: null,
+      dirty: false,
+    })
+    expect(await getClass(other.id)).toBeDefined()
+  })
+
+  it('leaves a note that was already deleted as it was', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const gone = await noteIn(discrete.id, ago(0))
+    await deleteNote(gone.id)
+    const before = (await db.notes.get(gone.id))!
+    await db.notes.update(gone.id, { dirty: false })
+    await tick()
+
+    await deleteClassCascade(discrete.id)
+
+    // Re-stamping it would push a row the server already has, and would move
+    // a deletion date that means something.
+    expect(await db.notes.get(gone.id)).toMatchObject({
+      deletedAt: before.deletedAt,
+      updatedAt: before.updatedAt,
+      dirty: false,
+    })
+  })
+
+  it('deletes a class with no notebooks at all', async () => {
+    const created = await createClass({ name: 'Zoológia' })
+    await db.notebooks.clear()
+
+    await deleteClassCascade(created.id)
+
+    expect(await getClass(created.id)).toBeUndefined()
   })
 })
