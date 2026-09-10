@@ -104,6 +104,14 @@ export async function countNotes(): Promise<number> {
   return db.notes.filter((note) => note.deletedAt === null).count()
 }
 
+// The rail's Unfiled count. Hidden at zero rather than shown as an empty
+// bucket, so the number is what decides whether the row exists at all.
+export async function countUnfiledNotes(): Promise<number> {
+  return db.notes
+    .filter((note) => note.deletedAt === null && note.notebookId === null)
+    .count()
+}
+
 // Every unsynced row, not only notes: clearEverything takes all three tables,
 // so a count that named only notes would let the sign-out confirmation
 // promise there was nothing to lose and then delete a class rename.

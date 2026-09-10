@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   countNotes,
+  countUnfiledNotes,
   createNote,
   deleteNote,
   getNote,
@@ -156,5 +157,17 @@ describe('restoreNote', () => {
     })
     expect(restored!.updatedAt > afterDelete).toBe(true)
     expect(await countNotes()).toBe(1)
+  })
+})
+
+describe('countUnfiledNotes', () => {
+  it('counts the notes in no notebook, and no others', async () => {
+    await createNote({})
+    await createNote({ notebookId: null })
+    await createNote({ notebookId: 'some-notebook' })
+    const deleted = await createNote({})
+    await deleteNote(deleted.id)
+
+    expect(await countUnfiledNotes()).toBe(2)
   })
 })

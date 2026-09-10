@@ -5,7 +5,14 @@ import { db, type Note } from '../../db/schema.ts'
 // no fuzzy matching and no relevance scoring beyond title-before-body:
 // substrings are enough for one person's notes, and they are predictable,
 // which matters more.
-export async function searchNotes(query: string): Promise<Note[]> {
+// `within` is the selected shelf: a class's notebooks, the unfiled notes, or
+// everything touched since midnight. A predicate rather than a set of ids
+// keeps Today, which is a time range and not a membership, in the same
+// argument as the other two.
+export async function searchNotes(
+  query: string,
+  within: (note: Note) => boolean = () => true,
+): Promise<Note[]> {
   const terms = normalize(query).split(' ').filter((term) => term !== '')
 
   const matches = await db.notes
@@ -14,6 +21,7 @@ export async function searchNotes(query: string): Promise<Note[]> {
     .filter(
       (note) =>
         note.deletedAt === null &&
+        within(note) &&
         terms.every((term) => note.searchText.includes(term)),
     )
     .toArray()

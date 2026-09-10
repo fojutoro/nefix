@@ -99,3 +99,27 @@ describe('searchNotes', () => {
     expect(titles(await searchNotes('spojitost'))).toEqual(['Poznámka'])
   })
 })
+
+describe('searchNotes within a scope', () => {
+  it('searches only the notes the scope admits', async () => {
+    await createNote({ title: 'Množiny', notebookId: 'discrete' })
+    await tick()
+    await createNote({ title: 'Množiny cvičenie', notebookId: 'algebra' })
+
+    const inDiscrete = await searchNotes(
+      'mnoziny',
+      (note) => note.notebookId === 'discrete',
+    )
+
+    expect(titles(inDiscrete)).toEqual(['Množiny'])
+  })
+
+  it('applies the scope to an empty query too', async () => {
+    await createNote({ title: 'Množiny', notebookId: 'discrete' })
+    await createNote({ title: 'Vektory', notebookId: null })
+
+    expect(titles(await searchNotes('', (note) => note.notebookId === null))).toEqual([
+      'Vektory',
+    ])
+  })
+})
