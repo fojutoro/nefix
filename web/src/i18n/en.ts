@@ -42,10 +42,12 @@ export const en = {
   'auth.signOut': 'Sign out',
   'auth.signOutConfirm':
     'Sign out? The notes on this device will be deleted.',
+  // Changes rather than notes: the count covers classes and notebooks too,
+  // and all three are deleted by the sign-out this confirms.
   'auth.signOutConfirmDirty_one':
-    '{{count}} note has not synced yet and will be lost. Sign out anyway?',
+    '{{count}} change has not synced yet and will be lost. Sign out anyway?',
   'auth.signOutConfirmDirty_other':
-    '{{count}} notes have not synced yet and will be lost. Sign out anyway?',
+    '{{count}} changes have not synced yet and will be lost. Sign out anyway?',
   'auth.sessionEnded': 'Your session ended. Sign in again to keep syncing.',
   'auth.signInAgain': 'Sign in again',
   'notes.listLabel': 'Notes',

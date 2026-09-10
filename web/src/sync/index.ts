@@ -1,8 +1,8 @@
 import { pullRemoteChanges } from './pull.ts'
-import { pushDirtyNotes } from './push.ts'
+import { pushDirtyRows } from './push.ts'
 import { statusFor, syncState, type SyncSummary } from './state.ts'
 
-// pushDirtyNotes has a guard of its own, against one push overlapping
+// pushDirtyRows has a guard of its own, against one push overlapping
 // another. This one is a different invariant: it covers the whole cycle, so
 // two overlapping runs cannot interleave one run's push with the other's
 // pull, which is the ordering everything below depends on.
@@ -25,8 +25,8 @@ export async function sync(): Promise<SyncSummary> {
     // conflict ever being detected. Pushing first means the server sees the
     // local edit and either accepts it or reports a conflict, which the fork
     // path already handles safely. Do not "simplify" this ordering.
-    summary.push = await pushDirtyNotes()
-    // pushDirtyNotes reports its outcome through syncState rather than
+    summary.push = await pushDirtyRows()
+    // pushDirtyRows reports its outcome through syncState rather than
     // throwing. A server that has just refused us has nothing to give: the
     // pull would fail the same way and overwrite the reason the push
     // recorded, leaving the user a worse message about the same problem.

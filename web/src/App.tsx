@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   clearEverything,
-  countDirtyNotes,
+  countDirtyRows,
   countNotes,
   createNote,
   deleteNote,
@@ -166,7 +166,7 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
   }
 
   const signOut = async () => {
-    const dirty = await countDirtyNotes()
+    const dirty = await countDirtyRows()
     const question =
       dirty > 0
         ? t('auth.signOutConfirmDirty', { count: dirty })

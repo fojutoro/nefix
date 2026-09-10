@@ -40,13 +40,13 @@ export const sk = {
   'auth.signOut': 'Odhlásiť sa',
   'auth.signOutConfirm': 'Odhlásiť sa? Poznámky v tomto zariadení sa odstránia.',
   'auth.signOutConfirmDirty_one':
-    '{{count}} poznámka nie je synchronizovaná a stratí sa. Odhlásiť sa aj tak?',
+    '{{count}} zmena nie je synchronizovaná a stratí sa. Odhlásiť sa aj tak?',
   'auth.signOutConfirmDirty_few':
-    '{{count}} poznámky nie sú synchronizované a stratia sa. Odhlásiť sa aj tak?',
+    '{{count}} zmeny nie sú synchronizované a stratia sa. Odhlásiť sa aj tak?',
   'auth.signOutConfirmDirty_many':
-    '{{count}} poznámky nie je synchronizovaných a stratia sa. Odhlásiť sa aj tak?',
+    '{{count}} zmeny nie je synchronizovaných a stratia sa. Odhlásiť sa aj tak?',
   'auth.signOutConfirmDirty_other':
-    '{{count}} poznámok nie je synchronizovaných a stratia sa. Odhlásiť sa aj tak?',
+    '{{count}} zmien nie je synchronizovaných a stratia sa. Odhlásiť sa aj tak?',
   'auth.sessionEnded': 'Vaša relácia skončila. Prihláste sa znova.',
   'auth.signInAgain': 'Prihlásiť sa znova',
   'notes.listLabel': 'Poznámky',

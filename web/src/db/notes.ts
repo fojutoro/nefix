@@ -104,10 +104,19 @@ export async function countNotes(): Promise<number> {
   return db.notes.filter((note) => note.deletedAt === null).count()
 }
 
+// Every unsynced row, not only notes: clearEverything takes all three tables,
+// so a count that named only notes would let the sign-out confirmation
+// promise there was nothing to lose and then delete a class rename.
+//
 // Deleted ones included: a soft delete that has not reached the server is
 // unsynced work like any other, and signing out would lose it.
-export async function countDirtyNotes(): Promise<number> {
-  return db.notes.filter((note) => note.dirty).count()
+export async function countDirtyRows(): Promise<number> {
+  const counts = await Promise.all([
+    db.notes.filter((row) => row.dirty).count(),
+    db.classes.filter((row) => row.dirty).count(),
+    db.notebooks.filter((row) => row.dirty).count(),
+  ])
+  return counts.reduce((total, count) => total + count, 0)
 }
 
 // Signing out on a shared or university machine has to mean the notes are
