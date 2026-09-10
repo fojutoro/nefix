@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { EditorView, minimalSetup } from 'codemirror'
 import { Annotation } from '@codemirror/state'
 import { markdown } from '@codemirror/lang-markdown'
+import { highlightActiveLine } from '@codemirror/view'
 import { observeNote } from '../../db/notes.ts'
 import { mathExtension } from './mathExtension.ts'
 
@@ -10,6 +11,23 @@ import { mathExtension } from './mathExtension.ts'
 // the user typed, which saves it as a local edit and forks the note against
 // the server on the next push.
 const fromSync = Annotation.define<boolean>()
+
+// CodeMirror paints the caret, the selection and the active line itself, in
+// its own colours, and none of it inherits from index.css — styling it from
+// there means outspecifying a theme that reattaches on every reconfigure.
+// The values are read back out of the palette so it stays the one source.
+const theme = EditorView.theme({
+  '&': { backgroundColor: 'var(--bg)', color: 'var(--text)' },
+  '.cm-content': { caretColor: 'var(--text)' },
+  // A 1px hairline in the default grey was the cursor that could not be found.
+  '&.cm-focused .cm-cursor': {
+    borderLeftColor: 'var(--text)',
+    borderLeftWidth: '2px',
+  },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
+    { backgroundColor: 'var(--selection)' },
+  '.cm-activeLine': { backgroundColor: 'var(--raised)' },
+})
 
 type Props = {
   noteId: string
@@ -41,6 +59,8 @@ export default function Editor({ noteId, initialBody, label, onChange }: Props) 
         minimalSetup,
         markdown(),
         mathExtension,
+        theme,
+        highlightActiveLine(),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ 'aria-label': latest.current.label }),
         EditorView.updateListener.of((update) => {
