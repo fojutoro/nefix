@@ -21,7 +21,11 @@ import {
   writeLastWrittenClassId,
   type ClassWithRecency,
 } from './db/classes.ts'
-import { listNotebooks } from './db/notebooks.ts'
+import {
+  createCollegebook,
+  listCollegebooks,
+  listNotebooks,
+} from './db/notebooks.ts'
 import {
   RAIL_DEFAULT,
   readRailWidth,
@@ -33,14 +37,16 @@ import {
   countNotes,
   countUnfiledNotes,
   createNote,
+  createPage,
   deleteNote,
+  listPages,
   readLastNoteId,
   updateNote,
   writeLastNoteId,
 } from './db/notes.ts'
 import type { Class, Note, Notebook } from './db/schema.ts'
 import AuthScreen from './features/auth/AuthScreen.tsx'
-import ClassPage from './features/classes/ClassPage.tsx'
+import ClassPage, { type BookCard } from './features/classes/ClassPage.tsx'
 import ClassRail from './features/classes/ClassRail.tsx'
 import RailHandle from './features/classes/RailHandle.tsx'
 import {
@@ -50,6 +56,7 @@ import {
   TODAY,
   type Selection,
 } from './features/classes/selection.ts'
+import Collegebook from './features/notes/Collegebook.tsx'
 import Editor from './features/notes/Editor.tsx'
 import { searchNotes } from './features/notes/search.ts'
 import { useAutosave } from './features/notes/useAutosave.ts'
@@ -108,6 +115,19 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
   const [unfiled, setUnfiled] = useState(0)
   const [chosen, setChosen] = useState<Selection>(TODAY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // The collegebook on screen, and its pages. A book is opened rather than
+  // selected: it replaces the class page the way a note does.
+  const [openBookId, setOpenBookId] = useState<string | null>(null)
+  // Both reads carry what they were read for, so the previous class's cards
+  // and the previous book's pages are never shown under the next one for the
+  // render before the new read lands.
+  const [books, setBooks] = useState<{
+    classId: string
+    cards: BookCard[]
+  } | null>(null)
+  const [pages, setPages] = useState<{ bookId: string; rows: Note[] } | null>(
+    null,
+  )
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
   const [railOpen, setRailOpen] = useState(false)
@@ -186,13 +206,58 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
     [query, scope],
   )
 
+  // The collegebooks of the class on screen, with the two things a card
+  // reports that the notebook row does not carry: how many pages it has and
+  // when it was last written in.
+  const refreshBooks = useCallback(() => {
+    // Only a class has collegebooks. Today is every class at once and Unfiled
+    // is not a course, so neither reads and neither shows any.
+    if (selection.kind !== 'class') return
+    const classId = selection.classId
+    return listCollegebooks(classId)
+      .then((found) =>
+        Promise.all(
+          found.map((book) =>
+            listPages(book.id).then((own) => ({
+              id: book.id,
+              name: book.name,
+              pages: own.length,
+              // From the pages rather than the book's own row: that row moves
+              // when the book is renamed, and what the card reports is when
+              // somebody last wrote in it.
+              writtenAt: own.reduce(
+                (latest, page) =>
+                  page.updatedAt > latest ? page.updatedAt : latest,
+                book.updatedAt,
+              ),
+            })),
+          ),
+        ),
+      )
+      .then((cards) => setBooks({ classId, cards }))
+  }, [selection])
+
+  const refreshPages = useCallback(() => {
+    if (openBookId === null) return
+    return listPages(openBookId).then((rows) =>
+      setPages({ bookId: openBookId, rows }),
+    )
+  }, [openBookId])
+
   // Held in a ref so the sync effect below keeps stable dependencies. Reading
   // `refresh` directly would restart the sync timer on every keystroke in the
   // search box.
-  const refreshRef = useRef(refresh)
+  // One call for every read the content pane needs, so a pull that lands
+  // rows refreshes the note list, the cards and the open book together.
+  const refreshAll = useCallback(
+    () => Promise.all([refresh(), refreshBooks(), refreshPages()]),
+    [refresh, refreshBooks, refreshPages],
+  )
+
+  const refreshRef = useRef(refreshAll)
   useEffect(() => {
-    refreshRef.current = refresh
-  }, [refresh])
+    refreshRef.current = refreshAll
+  }, [refreshAll])
 
   // The last class written in, guarded against a write per autosave.
   const written = useRef<string | null>(null)
@@ -226,12 +291,15 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
   // class it belongs to has to be carried forward from the render.
   const writingIn = useRef<string | null>(null)
   useEffect(() => {
-    writingIn.current = selected === null ? null : classOf(selected.notebookId)
+    // A page is written in the book it belongs to, and the book is a
+    // notebook, so the same lookup answers for both.
+    if (openBookId !== null) writingIn.current = classOf(openBookId)
+    else writingIn.current = selected === null ? null : classOf(selected.notebookId)
   })
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    void refreshAll()
+  }, [refreshAll])
 
   useEffect(() => {
     void refreshRail()
@@ -304,14 +372,21 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
     async (id: string, patch: { bodyMd: string; title: string }) => {
       await updateNote(id, patch)
       remember(written, writingIn.current)
-      await Promise.all([refresh(), refreshRail()])
+      await Promise.all([refreshAll(), refreshRail()])
     },
-    [refresh, refreshRail],
+    [refreshAll, refreshRail],
   )
 
   const onChange = useAutosave(selectedId, t('notes.untitled'), save)
 
   const create = async () => {
+    // Inside a collegebook the gesture means a new page, not a new note. It
+    // is the same gesture either way: somewhere to write.
+    if (openBookId !== null) {
+      await createPage(openBookId)
+      await Promise.all([refreshPages(), refreshBooks()])
+      return
+    }
     // A selected class means its general notebook, which the user never chose
     // and never sees. Today and Unfiled are not places to write, so the note
     // goes where the last one went, and with nothing written yet it is
@@ -390,6 +465,15 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
     setChosen({ kind: 'class', classId: created.id })
   }
 
+  const addBook = async (name: string) => {
+    if (selection.kind !== 'class') return
+    const book = await createCollegebook(name, selection.classId)
+    await refreshBooks()
+    // Straight into it, because a book is created in order to be written in
+    // and it already holds the page to write on.
+    setOpenBookId(book.id)
+  }
+
   const remove = async (id: string) => {
     await deleteNote(id)
     if (id === selectedId) setSelectedId(null)
@@ -402,11 +486,13 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
   const leave = () => {
     setFocusEditor(false)
     setSelectedId(null)
+    setOpenBookId(null)
   }
 
-  const latest = useRef({ create, leave, inEditor: selected !== null })
+  const inContent = selected !== null || openBookId !== null
+  const latest = useRef({ create, leave, inEditor: inContent })
   useEffect(() => {
-    latest.current = { create, leave, inEditor: selected !== null }
+    latest.current = { create, leave, inEditor: inContent }
   })
 
   useEffect(() => {
@@ -503,7 +589,32 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
   )
 
   let content = null
-  if (selected !== null) {
+  if (openBookId !== null) {
+    // The editor's shape: full width, a back arrow, the class it belongs to.
+    content = (
+      <div className="note">
+        <header className="note-head">
+          <button
+            type="button"
+            className="back"
+            aria-label={t('editor.back', { name: heading })}
+            onClick={leave}
+          >
+            <span aria-hidden="true">&larr;</span>
+            <span className="meta">{heading}</span>
+          </button>
+        </header>
+        <Collegebook
+          pages={pages?.bookId === openBookId ? pages.rows : []}
+          label={t('notes.editorLabel')}
+          mathLabel={t('notes.mathLabel')}
+          untitled={t('notes.untitled')}
+          save={save}
+          onCreatePage={() => void create()}
+        />
+      </div>
+    )
+  } else if (selected !== null) {
     content = (
       <div className="note">
         <header className="note-head">
@@ -537,6 +648,11 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
         semester={shelf?.semester ?? null}
         notes={notes}
         all={all}
+        books={
+          selection.kind === 'class' && books?.classId === selection.classId
+            ? books.cards
+            : []
+        }
         query={query}
         toggle={toggle}
         notice={
@@ -556,6 +672,8 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
           setSelectedId(id)
         }}
         onCreate={() => void create()}
+        onOpenBook={setOpenBookId}
+        onCreateBook={(name) => void addBook(name)}
         onDelete={(id) => void remove(id)}
         // An empty name does nothing: a class has to be called something.
         onRename={(name) => name !== '' && void editClass({ name })}
@@ -634,7 +752,13 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
       />
       <main
         className="content"
-        key={selected !== null ? `note:${selected.id}` : keyOf(selection)}
+        key={
+          openBookId !== null
+            ? `book:${openBookId}`
+            : selected !== null
+              ? `note:${selected.id}`
+              : keyOf(selection)
+        }
         data-fade={fade}
       >
         {content}

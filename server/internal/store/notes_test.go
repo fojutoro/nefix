@@ -388,3 +388,64 @@ func TestNoteByIDReportsMissing(t *testing.T) {
 		t.Errorf("error = %v, want ErrNotFound", err)
 	}
 }
+
+// The whole reason page_order is REAL. An integer column, or an int64
+// anywhere in the scan or the bind, truncates 1.5 to 1 and midpoint insertion
+// silently stops working after the first few pages.
+func TestUpsertNotePageOrderRoundTripsAsAFloat(t *testing.T) {
+	db := openTemp(t)
+	ctx := context.Background()
+	user := createUser(t, db, "jozef", "jozef@example.sk")
+
+	in := noteInput(noteID(1))
+	order := 1.5
+	in.PageOrder = &order
+
+	created, err := db.UpsertNote(ctx, user.ID, in)
+	if err != nil {
+		t.Fatalf("UpsertNote: %v", err)
+	}
+	if created.PageOrder == nil || *created.PageOrder != 1.5 {
+		t.Fatalf("page_order = %v, want 1.5", created.PageOrder)
+	}
+
+	// Read back through its own scan rather than trusting the copy the write
+	// returned: the truncation this guards against can live in either path.
+	read, err := db.NoteByID(ctx, noteID(1))
+	if err != nil {
+		t.Fatalf("NoteByID: %v", err)
+	}
+	if read.PageOrder == nil || *read.PageOrder != 1.5 {
+		t.Fatalf("page_order read back = %v, want 1.5", read.PageOrder)
+	}
+
+	// A midpoint of a midpoint, which is what the fourth insertion between
+	// two pages actually asks the column to hold.
+	next := noteInput(noteID(1))
+	next.Version = 1
+	deep := 1.0625
+	next.PageOrder = &deep
+	updated, err := db.UpsertNote(ctx, user.ID, next)
+	if err != nil {
+		t.Fatalf("UpsertNote update: %v", err)
+	}
+	if updated.PageOrder == nil || *updated.PageOrder != 1.0625 {
+		t.Errorf("page_order = %v, want 1.0625", updated.PageOrder)
+	}
+}
+
+// Null is a note that is not a page, which is every note the app had before
+// collegebooks existed.
+func TestUpsertNoteKeepsPageOrderNullForAnOrdinaryNote(t *testing.T) {
+	db := openTemp(t)
+	ctx := context.Background()
+	user := createUser(t, db, "jozef", "jozef@example.sk")
+
+	created, err := db.UpsertNote(ctx, user.ID, noteInput(noteID(1)))
+	if err != nil {
+		t.Fatalf("UpsertNote: %v", err)
+	}
+	if created.PageOrder != nil {
+		t.Errorf("page_order = %v, want nil", created.PageOrder)
+	}
+}

@@ -36,6 +36,7 @@ const row = (bodyMd: string, dirty: boolean): Note => ({
   id: ID,
   classId: null,
   notebookId: null,
+  pageOrder: null,
   title: 'Diskrétna matematika',
   bodyMd,
   searchText: '',

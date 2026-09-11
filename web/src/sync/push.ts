@@ -34,6 +34,7 @@ const toWire = (note: Note): PushNote => ({
   body_md: note.bodyMd,
   visibility: note.visibility,
   forked_from_id: note.forkedFromId,
+  page_order: note.pageOrder,
   version: note.version,
   // Already RFC 3339: every writer stores toISOString().
   deleted_at: note.deletedAt,
@@ -55,6 +56,7 @@ const toWireNotebook = (row: Notebook): PushNotebook => ({
   class_id: row.classId,
   name: row.name,
   is_general: row.isGeneral,
+  kind: row.kind,
   version: row.version,
   deleted_at: row.deletedAt,
 })
@@ -70,6 +72,7 @@ export const fromWire = (server: WireNote): Note => ({
   bodyMd: server.body_md,
   searchText: searchTextOf(server.title, server.body_md),
   visibility: server.visibility,
+  pageOrder: server.page_order,
   createdAt: server.created_at,
   updatedAt: server.updated_at,
   deletedAt: server.deleted_at,
@@ -101,6 +104,7 @@ export const fromWireNotebook = (server: WireNotebook): Notebook => ({
   classId: server.class_id,
   name: server.name,
   isGeneral: server.is_general,
+  kind: server.kind,
   createdAt: server.created_at,
   updatedAt: server.updated_at,
   deletedAt: server.deleted_at,

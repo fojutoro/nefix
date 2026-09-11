@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -433,4 +434,115 @@ func seqsOf(page pullResponse) []int64 {
 
 func equalSeqs(got, want []int64) bool {
 	return slices.Equal(got, want)
+}
+
+// A kind this server has never heard of is a client bug, not a server fault:
+// the column deliberately carries no CHECK, so if this validation is missing
+// the value is written and nothing ever reports it. 500 would be the answer
+// if the constraint lived in the schema instead.
+func TestPushRejectsAnUnknownNotebookKind(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	notebook := notebookPayload(notebookSyncID(1), classSyncID(1), 0)
+	notebook["kind"] = "lecture"
+
+	rec := call(t, api, http.MethodPost, "/api/v1/sync/push",
+		map[string]any{"notebooks": []any{notebook}}, cookie)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusBadRequest, rec.Body)
+	}
+	// The message has to name the row and the value, or a client author
+	// reading a log learns only that something was wrong somewhere.
+	if !strings.Contains(rec.Body.String(), notebookSyncID(1)) {
+		t.Errorf("body %s does not name the notebook", rec.Body)
+	}
+
+	// Nothing is written: a refused batch leaves no half of itself behind.
+	pulled := pullNotes(t, api, cookie, "?since=0")
+	if len(pulled.Notebooks) != 0 {
+		t.Errorf("notebooks = %d, want 0 after a refused push", len(pulled.Notebooks))
+	}
+}
+
+func TestPushAcceptsBothKnownNotebookKinds(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	book := notebookPayload(notebookSyncID(1), classSyncID(1), 0)
+	book["kind"] = "collegebook"
+	plain := notebookPayload(notebookSyncID(2), classSyncID(1), 0)
+	plain["kind"] = "notes"
+
+	got := pushRows(t, api, cookie, map[string]any{"notebooks": []any{book, plain}})
+	if len(got.Results) != 2 {
+		t.Fatalf("results = %d, want 2", len(got.Results))
+	}
+	if got.Results[0].Notebook == nil || got.Results[0].Notebook.Kind != "collegebook" {
+		t.Errorf("results[0] kind = %v, want collegebook", got.Results[0].Notebook)
+	}
+	if got.Results[1].Notebook == nil || got.Results[1].Notebook.Kind != "notes" {
+		t.Errorf("results[1] kind = %v, want notes", got.Results[1].Notebook)
+	}
+}
+
+// A client that predates collegebooks sends no kind at all, and its notebooks
+// must keep syncing. Absent is 'notes', never a 400.
+func TestPushTreatsAnAbsentKindAsNotes(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	got := pushRows(t, api, cookie, map[string]any{
+		"notebooks": []any{notebookPayload(notebookSyncID(1), classSyncID(1), 0)},
+	})
+	if got.Results[0].Notebook == nil || got.Results[0].Notebook.Kind != "notes" {
+		t.Errorf("kind = %v, want notes", got.Results[0].Notebook)
+	}
+}
+
+// The wire half of the store's float test. JSON numbers are float64 all the
+// way through, but a field typed *int64 anywhere in the chain would decode
+// 1.5 as an error or truncate it, and midpoint insertion is the whole reason
+// the column is REAL.
+func TestPagePageOrderRoundTripsAsAFloat(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	page := filedNotePayload(syncID(1), notebookSyncID(1), 0)
+	page["page_order"] = 1.5
+
+	got := pushRows(t, api, cookie, map[string]any{"notes": []any{page}})
+	if got.Results[0].Note == nil {
+		t.Fatalf("no note came back: %+v", got.Results[0])
+	}
+	if got.Results[0].Note.PageOrder == nil || *got.Results[0].Note.PageOrder != 1.5 {
+		t.Errorf("pushed page_order = %v, want 1.5", got.Results[0].Note.PageOrder)
+	}
+
+	pulled := pullNotes(t, api, cookie, "?since=0")
+	if len(pulled.Notes) != 1 {
+		t.Fatalf("notes = %d, want 1", len(pulled.Notes))
+	}
+	if pulled.Notes[0].PageOrder == nil || *pulled.Notes[0].PageOrder != 1.5 {
+		t.Errorf("pulled page_order = %v, want 1.5", pulled.Notes[0].PageOrder)
+	}
+
+	// The JSON itself, not only the decoded struct: an int64 field would
+	// serialise this as 1 and both assertions above would still pass if the
+	// decoding side agreed with the encoding side about being wrong.
+	rec := call(t, api, http.MethodGet, "/api/v1/sync/pull?since=0", nil, cookie)
+	if !strings.Contains(rec.Body.String(), `"page_order":1.5`) {
+		t.Errorf("body %s does not carry page_order as 1.5", rec.Body)
+	}
+}
+
+// Every note the app had before collegebooks. Null is not a page.
+func TestOrdinaryNoteCarriesANullPageOrder(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	got := pushRows(t, api, cookie, map[string]any{"notes": []any{notePayload(syncID(1), 0)}})
+	if got.Results[0].Note == nil || got.Results[0].Note.PageOrder != nil {
+		t.Errorf("page_order = %v, want null", got.Results[0].Note)
+	}
 }

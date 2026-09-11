@@ -17,6 +17,10 @@ export type Note = {
   // `faculty` is readable by its author alone until users have a faculty,
   // but the server already returns it, so the union has to admit it.
   visibility: 'private' | 'faculty' | 'public'
+  // The note's position in its collegebook, and null for a note that is not
+  // a page. A float, so a page inserted between two others is the midpoint of
+  // their orders and nothing after it is renumbered.
+  pageOrder: number | null
   // ISO 8601 UTC. One representation everywhere, and it sorts lexically.
   createdAt: string
   updatedAt: string
@@ -64,6 +68,10 @@ export type Notebook = {
   // The notebook created with its class. Renameable but not deletable, a
   // rule enforced in deleteNotebook rather than only in the UI.
   isGeneral: boolean
+  // A collegebook is a notebook whose notes are pages. The two are one table
+  // and one sync type on purpose: a page is a note with an order, and nothing
+  // below this line needs to know the difference.
+  kind: 'notes' | 'collegebook'
   createdAt: string
   updatedAt: string
   deletedAt: string | null
@@ -140,6 +148,29 @@ export function declareSchema(db: Dexie): void {
           note.notebookId = null
         }),
     )
+
+  // No new index. pageOrder is read through the notebookId index and sorted
+  // in memory, which is the same trade the rest of this file makes: an index
+  // is a version bump, and a page list is one collegebook long.
+  db.version(5).upgrade(async (tx) => {
+    // Both tables are rewritten, deleted rows included. A restore brings one
+    // back, and it would otherwise return with the field undefined — a value
+    // no filter matches, which is the trap v4's comment above describes.
+    await tx
+      .table<Notebook>('notebooks')
+      .toCollection()
+      .modify((notebook) => {
+        // Every notebook already on a device is one of notes: until this
+        // version there was no way to make anything else.
+        notebook.kind = 'notes'
+      })
+    await tx
+      .table<Note>('notes')
+      .toCollection()
+      .modify((note) => {
+        note.pageOrder = null
+      })
+  })
 }
 
 export const db = new Dexie('nefix') as Dexie & {

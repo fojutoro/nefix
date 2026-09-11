@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Note } from '../../db/schema.ts'
+import Icon from '../../ui/Icon.tsx'
 import NoteRow from '../notes/NoteRow.tsx'
 import { divide, relative, useMinute } from '../notes/relative.ts'
 import ActivityStrip from './ActivityStrip.tsx'
@@ -18,6 +19,16 @@ const QUIET_MS = 3_600_000
 // Past a week the line stops reporting and starts nudging.
 const IDLE_MS = 7 * 86_400_000
 
+// A collegebook as the card needs it: the book itself never carries a count
+// or a time, and reading its pages in the card would be a query per card
+// inside the render.
+export type BookCard = {
+  id: string
+  name: string
+  pages: number
+  writtenAt: string
+}
+
 type Props = {
   kind: Selection['kind']
   heading: string
@@ -26,6 +37,9 @@ type Props = {
   semester: string | null
   // The cards, filtered by the search box.
   notes: Note[]
+  // The class's collegebooks. Containers you open, so they are not mixed
+  // into the list of loose notes below them.
+  books: BookCard[]
   // The shelf itself, which the strip and the state line are about: neither
   // should change shape because somebody is typing in the search box.
   all: Note[]
@@ -38,6 +52,8 @@ type Props = {
   onQueryChange: (query: string) => void
   onSelect: (id: string) => void
   onCreate: () => void
+  onOpenBook: (id: string) => void
+  onCreateBook: (name: string) => void
   onDelete: (id: string) => void
   onRename: (name: string) => void
   onCode: (code: string) => void
@@ -55,12 +71,15 @@ export default function ClassPage({
   semester,
   notes,
   all,
+  books,
   query,
   toggle,
   notice,
   onQueryChange,
   onSelect,
   onCreate,
+  onOpenBook,
+  onCreateBook,
   onDelete,
   onRename,
   onCode,
@@ -88,6 +107,10 @@ export default function ClassPage({
   )
   // The input keeps its own value so typing is never held up by the read.
   const [text, setText] = useState(query)
+  // Local, unlike the rail's, because nothing outside this page opens the
+  // field: there is no shortcut and no notice that starts a collegebook.
+  const [naming, setNaming] = useState(false)
+  const [bookName, setBookName] = useState('')
 
   useEffect(() => {
     // Bailing out when the two already agree keeps the clear button, which
@@ -182,6 +205,73 @@ export default function ClassPage({
       {/* The deadline lands here in a later change. Deliberately empty: the
           gap is built now so the page does not move when it arrives. */}
       <div className="slot" />
+      {/* Cards rather than rows, because a collegebook is a container you
+          open and a note is a document you read. Mixing them into one list
+          would make the two look like the same kind of thing. */}
+      <section className="books">
+        <h2 className="meta">{t('books.label')}</h2>
+        <ul>
+          {books.map((book) => (
+            <li key={book.id}>
+              <button
+                type="button"
+                className="book-card"
+                onClick={() => onOpenBook(book.id)}
+              >
+                <Icon name="notebook-pen" />
+                <span className="book-title">{book.name}</span>
+                <span className="meta">
+                  {t('books.pages', { count: book.pages })}
+                </span>
+                <span className="meta">
+                  {relative(book.writtenAt, format, now)}
+                </span>
+              </button>
+            </li>
+          ))}
+          <li>
+            {naming ? (
+              <form
+                className="book-card book-naming"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const trimmed = bookName.trim()
+                  // A book is named after a course or a term, so there is no
+                  // untitled one to create.
+                  if (trimmed === '') return
+                  setBookName('')
+                  setNaming(false)
+                  onCreateBook(trimmed)
+                }}
+              >
+                <input
+                  autoFocus
+                  value={bookName}
+                  aria-label={t('books.name')}
+                  placeholder={t('books.name')}
+                  onChange={(event) => setBookName(event.target.value)}
+                  onKeyDown={(event) => {
+                    // Held here, or Escape closes the page behind the field.
+                    if (event.key !== 'Escape') return
+                    event.stopPropagation()
+                    setNaming(false)
+                    setBookName('')
+                  }}
+                  onBlur={() => setNaming(false)}
+                />
+              </form>
+            ) : (
+              <button
+                type="button"
+                className="book-card book-new"
+                onClick={() => setNaming(true)}
+              >
+                {t('books.create')}
+              </button>
+            )}
+          </li>
+        </ul>
+      </section>
       <div className="page-tools">
         <div className="search">
           <input
