@@ -26,11 +26,15 @@ type Note struct {
 	BodyMd       string
 	Visibility   string
 	ForkedFromID *string
-	Version      int64
-	Seq          int64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	DeletedAt    *time.Time
+	// The note's position in its collegebook. Nil is a note that is not a
+	// page. A float so that inserting between two pages is a midpoint rather
+	// than a renumbering of every page after it.
+	PageOrder *float64
+	Version   int64
+	Seq       int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time
 }
 
 // What a client may set. Not id-plus-Note: the server owns seq, the
@@ -44,12 +48,13 @@ type NoteInput struct {
 	BodyMd       string
 	Visibility   string
 	ForkedFromID *string
+	PageOrder    *float64
 	Version      int64
 	DeletedAt    *time.Time
 }
 
 const noteColumns = `id, author_id, class_id, notebook_id, title, body_md, visibility,
-	forked_from_id, version, seq, created_at, updated_at, deleted_at`
+	forked_from_id, page_order, version, seq, created_at, updated_at, deleted_at`
 
 // Satisfied by both *sql.Row and *sql.Rows, so one scan serves the single
 // lookups and the pull.
@@ -63,7 +68,7 @@ func scanNote(r row) (*Note, error) {
 	var deletedAt sql.NullString
 
 	err := r.Scan(&n.ID, &n.AuthorID, &n.ClassID, &n.NotebookID, &n.Title, &n.BodyMd, &n.Visibility,
-		&n.ForkedFromID, &n.Version, &n.Seq, &createdAt, &updatedAt, &deletedAt)
+		&n.ForkedFromID, &n.PageOrder, &n.Version, &n.Seq, &createdAt, &updatedAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -152,18 +157,18 @@ func (db *DB) UpsertNote(ctx context.Context, userID int64, in NoteInput) (*Note
 	if existing == nil {
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO notes (id, author_id, class_id, notebook_id, title, body_md, visibility,
-				forked_from_id, version, seq, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+				forked_from_id, page_order, version, seq, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
 			in.ID, userID, in.ClassID, in.NotebookID, in.Title, in.BodyMd, in.Visibility,
-			in.ForkedFromID, seq, nullTime(in.DeletedAt))
+			in.ForkedFromID, in.PageOrder, seq, nullTime(in.DeletedAt))
 	} else {
 		_, err = tx.ExecContext(ctx,
 			`UPDATE notes SET class_id = ?, notebook_id = ?, title = ?, body_md = ?, visibility = ?,
-				forked_from_id = ?, version = version + 1, seq = ?,
+				forked_from_id = ?, page_order = ?, version = version + 1, seq = ?,
 				updated_at = datetime('now'), deleted_at = ?
 			WHERE id = ?`,
 			in.ClassID, in.NotebookID, in.Title, in.BodyMd, in.Visibility,
-			in.ForkedFromID, seq, nullTime(in.DeletedAt), in.ID)
+			in.ForkedFromID, in.PageOrder, seq, nullTime(in.DeletedAt), in.ID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("writing note %s: %w", in.ID, err)

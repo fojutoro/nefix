@@ -1,3 +1,4 @@
+import { createPage } from './notes.ts'
 import { db, type Notebook } from './schema.ts'
 import { uuidv7 } from './uuid.ts'
 
@@ -14,6 +15,7 @@ export async function createNotebook(
     name,
     // Only createClass makes a general notebook, and it does so directly.
     isGeneral: false,
+    kind: 'notes',
     createdAt: timestamp,
     updatedAt: timestamp,
     deletedAt: null,
@@ -23,6 +25,49 @@ export async function createNotebook(
   }
   await db.notebooks.add(notebook)
   return notebook
+}
+
+// The book and its first page in one transaction, because a collegebook with
+// no pages is a book you cannot write in, and half of this pair reaching the
+// database is worse than neither. createClass does the same for a class and
+// its general notebook.
+export async function createCollegebook(
+  name: string,
+  classId: string | null = null,
+): Promise<Notebook> {
+  const timestamp = now()
+  const book: Notebook = {
+    id: uuidv7(),
+    classId,
+    name,
+    isGeneral: false,
+    kind: 'collegebook',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    deletedAt: null,
+    version: 0,
+    dirty: true,
+    syncedAt: null,
+  }
+  await db.transaction('rw', db.notebooks, db.notes, async () => {
+    await db.notebooks.add(book)
+    await createPage(book.id)
+  })
+  return book
+}
+
+// Undefined lists the kind across every class, for the reason listNotebooks
+// takes its class id that way.
+export async function listNotebooksOfKind(
+  kind: Notebook['kind'],
+  classId?: string,
+): Promise<Notebook[]> {
+  const rows = await listNotebooks(classId)
+  return rows.filter((row) => row.kind === kind)
+}
+
+export async function listCollegebooks(classId?: string): Promise<Notebook[]> {
+  return listNotebooksOfKind('collegebook', classId)
 }
 
 export async function getNotebook(id: string): Promise<Notebook | undefined> {

@@ -6,7 +6,8 @@ import {
   listNotes,
   updateNote,
 } from '../../db/notes.ts'
-import { db } from '../../db/schema.ts'
+import { db, type Notebook } from '../../db/schema.ts'
+import { scopeOf } from '../classes/selection.ts'
 import { searchNotes } from './search.ts'
 
 // updatedAt is compared as a string, so a note written in the same
@@ -121,5 +122,65 @@ describe('searchNotes within a scope', () => {
     expect(titles(await searchNotes('', (note) => note.notebookId === null))).toEqual([
       'Vektory',
     ])
+  })
+})
+
+// A page is a note with an order, and it lives in a notebook that belongs to
+// a class. Without a guard in scopeOf it therefore turns up in the class's
+// table of contents, in Today and in any search — three lists where a page
+// torn out of its book is actively wrong. The four tests below are the same
+// predicate through its three call sites, because they share the predicate
+// and nothing else.
+describe('scopeOf keeps pages out of the note lists', () => {
+  const book = { id: 'book', classId: 'c1', kind: 'collegebook' } as Notebook
+  const plain = { id: 'plain', classId: 'c1', kind: 'notes' } as Notebook
+
+  const seed = async () => {
+    await createNote({ title: 'Loose note', notebookId: plain.id })
+    await tick()
+    await createNote({ title: 'Page one', notebookId: book.id, pageOrder: 1 })
+  }
+
+  it('leaves them out of the class contents', async () => {
+    await seed()
+
+    const scope = scopeOf({ kind: 'class', classId: 'c1' }, [book, plain])
+    expect(titles(await searchNotes('', scope))).toEqual(['Loose note'])
+  })
+
+  it('leaves them out of Today', async () => {
+    await seed()
+
+    const scope = scopeOf({ kind: 'today' }, [book, plain])
+    expect(titles(await searchNotes('', scope))).toEqual(['Loose note'])
+  })
+
+  it('leaves them out of Unfiled', async () => {
+    await createNote({ title: 'Unfiled note' })
+    await tick()
+    // A page whose book has no class is still a page, and Unfiled is the one
+    // list a null notebookId would otherwise put it in.
+    await createNote({ title: 'Orphan page', pageOrder: 1 })
+
+    const scope = scopeOf({ kind: 'unfiled' }, [])
+    expect(titles(await searchNotes('', scope))).toEqual(['Unfiled note'])
+  })
+
+  it('leaves them out of a search', async () => {
+    await createNote({
+      title: 'Množiny',
+      bodyMd: 'relácie',
+      notebookId: plain.id,
+    })
+    await tick()
+    await createNote({
+      title: 'Množiny',
+      bodyMd: 'relácie',
+      notebookId: book.id,
+      pageOrder: 1,
+    })
+
+    const scope = scopeOf({ kind: 'class', classId: 'c1' }, [book, plain])
+    expect(await searchNotes('mnoziny', scope)).toHaveLength(1)
   })
 })

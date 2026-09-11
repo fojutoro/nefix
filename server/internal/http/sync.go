@@ -25,6 +25,12 @@ const (
 
 var visibilities = []string{"private", "faculty", "public"}
 
+// Not a CHECK on the column, deliberately: see 0007_collegebooks.sql. Here a
+// kind this server does not know is a 400 that names the row, rather than a
+// constraint failure that reads as a server fault and stops the client's sync
+// dead.
+var notebookKinds = []string{"notes", "collegebook"}
+
 // What a client may send. The server owns seq, version arithmetic and the
 // timestamps, so none of them are fields here except the version the client
 // last saw, which is the whole point of the exchange.
@@ -38,8 +44,12 @@ type pushNote struct {
 	BodyMd       string  `json:"body_md"`
 	Visibility   string  `json:"visibility"`
 	ForkedFromID *string `json:"forked_from_id"`
-	Version      int64   `json:"version"`
-	DeletedAt    *string `json:"deleted_at"`
+	// The note's place in its collegebook, null for a note that is not a
+	// page. A float: a page inserted between two others takes the midpoint of
+	// their orders, so nothing after it is renumbered.
+	PageOrder *float64 `json:"page_order"`
+	Version   int64    `json:"version"`
+	DeletedAt *string  `json:"deleted_at"`
 }
 
 type pushClass struct {
@@ -61,6 +71,9 @@ type pushNotebook struct {
 	ClassID   *string `json:"class_id"`
 	Name      string  `json:"name"`
 	IsGeneral bool    `json:"is_general"`
+	// 'notes' or 'collegebook'. Absent is 'notes': a client that predates
+	// collegebooks sends no kind at all and must keep syncing.
+	Kind      string  `json:"kind"`
 	Version   int64   `json:"version"`
 	DeletedAt *string `json:"deleted_at"`
 }
@@ -98,6 +111,7 @@ type noteResponse struct {
 	BodyMd       string     `json:"body_md"`
 	Visibility   string     `json:"visibility"`
 	ForkedFromID *string    `json:"forked_from_id"`
+	PageOrder    *float64   `json:"page_order"`
 	Version      int64      `json:"version"`
 	Seq          int64      `json:"seq"`
 	CreatedAt    time.Time  `json:"created_at"`
@@ -124,6 +138,7 @@ type notebookResponse struct {
 	ClassID   *string    `json:"class_id"`
 	Name      string     `json:"name"`
 	IsGeneral bool       `json:"is_general"`
+	Kind      string     `json:"kind"`
 	Version   int64      `json:"version"`
 	Seq       int64      `json:"seq"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -148,6 +163,7 @@ func newNoteResponse(n *store.Note) *noteResponse {
 		BodyMd:       n.BodyMd,
 		Visibility:   n.Visibility,
 		ForkedFromID: n.ForkedFromID,
+		PageOrder:    n.PageOrder,
 		Version:      n.Version,
 		Seq:          n.Seq,
 		CreatedAt:    n.CreatedAt,
@@ -178,6 +194,7 @@ func newNotebookResponse(n *store.Notebook) *notebookResponse {
 		ClassID:   n.ClassID,
 		Name:      n.Name,
 		IsGeneral: n.IsGeneral,
+		Kind:      n.Kind,
 		Version:   n.Version,
 		Seq:       n.Seq,
 		CreatedAt: n.CreatedAt,
@@ -272,6 +289,7 @@ func (n *pushNote) validate() (store.NoteInput, string) {
 		BodyMd:       n.BodyMd,
 		Visibility:   n.Visibility,
 		ForkedFromID: n.ForkedFromID,
+		PageOrder:    n.PageOrder,
 		Version:      n.Version,
 		DeletedAt:    deletedAt,
 	}, ""
@@ -324,6 +342,11 @@ func (n *pushNotebook) validate() (store.NotebookInput, string) {
 	if message := optionalUUID(n.ClassID, "class_id", subject); message != "" {
 		return store.NotebookInput{}, message
 	}
+	// Empty is absent rather than wrong. The store turns it into 'notes',
+	// which is the one place that default lives.
+	if n.Kind != "" && !slices.Contains(notebookKinds, n.Kind) {
+		return store.NotebookInput{}, subject + ": kind must be notes or collegebook"
+	}
 
 	deletedAt, message := optionalTime(n.DeletedAt, "deleted_at", subject)
 	if message != "" {
@@ -335,6 +358,7 @@ func (n *pushNotebook) validate() (store.NotebookInput, string) {
 		ClassID:   n.ClassID,
 		Name:      n.Name,
 		IsGeneral: n.IsGeneral,
+		Kind:      n.Kind,
 		Version:   n.Version,
 		DeletedAt: deletedAt,
 	}, ""

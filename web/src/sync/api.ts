@@ -34,6 +34,8 @@ export type PushNote = {
   body_md: string
   visibility: Visibility
   forked_from_id: string | null
+  // Null for a note that is not a page. A float: see db/schema.ts.
+  page_order: number | null
   version: number
   deleted_at: string | null
 }
@@ -54,6 +56,7 @@ export type PushNotebook = {
   class_id: string | null
   name: string
   is_general: boolean
+  kind: 'notes' | 'collegebook'
   version: number
   deleted_at: string | null
 }

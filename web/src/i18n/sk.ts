@@ -124,4 +124,13 @@ export const sk = {
   'notes.moreHeadings_many': '+{{count}} ďalšie',
   'notes.moreHeadings_other': '+{{count}} ďalších',
   'notes.emptySearch': 'Hľadaniu nezodpovedá žiadna poznámka.',
+  'books.label': 'Zošity',
+  'books.create': '+ Nový zošit',
+  'books.name': 'Názov zošita',
+  'books.pages_one': '{{count}} strana',
+  'books.pages_few': '{{count}} strany',
+  'books.pages_many': '{{count}} strany',
+  'books.pages_other': '{{count}} strán',
+  'book.pagesLabel': 'Strany',
+  'book.newPage': '+ Nová strana',
 }

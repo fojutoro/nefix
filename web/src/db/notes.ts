@@ -10,6 +10,7 @@ export async function createNote(input: {
   title?: string
   bodyMd?: string
   notebookId?: string | null
+  pageOrder?: number | null
 }): Promise<Note> {
   const now = new Date().toISOString()
   const title = input.title ?? ''
@@ -24,6 +25,8 @@ export async function createNote(input: {
     bodyMd,
     searchText: searchTextOf(title, bodyMd),
     visibility: 'private',
+    // A note, not a page. createPage is the only thing that sets an order.
+    pageOrder: input.pageOrder ?? null,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -56,6 +59,53 @@ export async function listNotes(notebookId?: string | null): Promise<Note[]> {
         (notebookId === undefined || note.notebookId === notebookId),
     )
     .toArray()
+}
+
+// Every page of a collegebook, in the order it is read in. The rows come back
+// through the notebookId index and are sorted here: pageOrder is a float and
+// carries no index of its own, which is the trade declareSchema explains.
+export async function listPages(notebookId: string): Promise<Note[]> {
+  const pages = await db.notes
+    .where('notebookId')
+    .equals(notebookId)
+    .filter((note) => note.deletedAt === null && note.pageOrder !== null)
+    .toArray()
+  return pages.sort((a, b) => a.pageOrder! - b.pageOrder!)
+}
+
+// The highest order in the book, or 0 for a book with no pages. Read rather
+// than counted: a deleted page leaves a gap in the count but not in the
+// orders, and appending by count would land a new page on top of an old one.
+async function lastOrder(notebookId: string): Promise<number> {
+  const pages = await listPages(notebookId)
+  return pages.length === 0 ? 0 : pages[pages.length - 1]!.pageOrder!
+}
+
+export async function createPage(notebookId: string): Promise<Note> {
+  return createNote({
+    notebookId,
+    pageOrder: (await lastOrder(notebookId)) + 1,
+  })
+}
+
+// The midpoint of this page and the one after it, so inserting between two
+// pages writes one row instead of renumbering every page below. Pages are
+// manual: nothing here reflows content, measures a block or decides where a
+// page should end. That is deliberately not built — see the reading view.
+export async function insertPageAfter(noteId: string): Promise<Note> {
+  const page = await db.notes.get(noteId)
+  if (!page || page.notebookId === null || page.pageOrder === null) {
+    throw new Error(`note ${noteId} is not a page`)
+  }
+  const pages = await listPages(page.notebookId)
+  const next = pages.find((row) => row.pageOrder! > page.pageOrder!)
+  return createNote({
+    notebookId: page.notebookId,
+    pageOrder:
+      next === undefined
+        ? page.pageOrder + 1
+        : (page.pageOrder + next.pageOrder!) / 2,
+  })
 }
 
 export async function updateNote(

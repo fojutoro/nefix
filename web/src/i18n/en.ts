@@ -114,4 +114,14 @@ export const en = {
   'notes.moreHeadings_one': '+{{count}} more',
   'notes.moreHeadings_other': '+{{count}} more',
   'notes.emptySearch': 'No notes match your search.',
+  // A collegebook is where a lecture is dumped as it happens; a note is one
+  // topic in depth. The two words have to stay distinct in the interface,
+  // because choosing between them is the whole point.
+  'books.label': 'Collegebooks',
+  'books.create': '+ New collegebook',
+  'books.name': 'Collegebook name',
+  'books.pages_one': '{{count}} page',
+  'books.pages_other': '{{count}} pages',
+  'book.pagesLabel': 'Pages',
+  'book.newPage': '+ New page',
 }

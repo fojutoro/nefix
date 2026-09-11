@@ -270,3 +270,37 @@ func TestNotebookByIDReportsMissing(t *testing.T) {
 		t.Errorf("error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestUpsertNotebookRoundTripsKind(t *testing.T) {
+	db := openTemp(t)
+	ctx := context.Background()
+	user := createUser(t, db, "jozef", "jozef@example.sk")
+
+	// The default, and what every notebook written before this migration
+	// holds.
+	plain, err := db.UpsertNotebook(ctx, user.ID, notebookInput(notebookID(1)))
+	if err != nil {
+		t.Fatalf("UpsertNotebook: %v", err)
+	}
+	if plain.Kind != "notes" {
+		t.Errorf("kind = %q, want notes", plain.Kind)
+	}
+
+	in := notebookInput(notebookID(2))
+	in.Kind = "collegebook"
+	book, err := db.UpsertNotebook(ctx, user.ID, in)
+	if err != nil {
+		t.Fatalf("UpsertNotebook collegebook: %v", err)
+	}
+	if book.Kind != "collegebook" {
+		t.Errorf("kind = %q, want collegebook", book.Kind)
+	}
+
+	read, err := db.NotebookByID(ctx, notebookID(2))
+	if err != nil {
+		t.Fatalf("NotebookByID: %v", err)
+	}
+	if read.Kind != "collegebook" {
+		t.Errorf("kind read back = %q, want collegebook", read.Kind)
+	}
+}

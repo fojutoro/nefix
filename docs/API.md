@@ -258,7 +258,7 @@ The notebook object:
 ```json
 { "id": "0192f0c1-3c4d-7e8f-9a0b-1c2d3e4f5a6b",
   "class_id": "0192f0b1-3c4d-7e8f-9a0b-1c2d3e4f5a6b",
-  "name": "Prednášky", "is_general": true,
+  "name": "Prednášky", "is_general": true, "kind": "notes",
   "version": 1, "seq": 13,
   "created_at": "2026-08-05T09:30:00Z", "updated_at": "2026-08-05T09:30:00Z",
   "deleted_at": null }
@@ -273,13 +273,23 @@ class is something you can type in immediately. It is renameable but not
 deletable, and that rule is the client's: neither the schema nor this API
 enforces it.
 
+`kind` is `notes` or `collegebook`, and **absent means `notes`**: a client
+written before collegebooks existed sends no `kind` at all and keeps
+syncing unchanged. A collegebook is an ordinary notebook whose notes carry
+a `page_order` — there is no collegebook object, no collegebook endpoint
+and no second sync path.
+
+Any other value is a 400. The column carries no CHECK constraint, so that
+a kind from a future client is refused here, with a message naming the row,
+rather than failing a constraint and reading as a server fault.
+
 The note object:
 
 ```json
 { "id": "0192f0a1-3c4d-7e8f-9a0b-1c2d3e4f5a6b", "class_id": null,
   "notebook_id": "0192f0c1-3c4d-7e8f-9a0b-1c2d3e4f5a6b",
   "title": "Diskrétna matematika", "body_md": "# Množiny",
-  "visibility": "private", "forked_from_id": null,
+  "visibility": "private", "forked_from_id": null, "page_order": null,
   "version": 3, "seq": 14,
   "created_at": "2026-08-05T09:30:00Z", "updated_at": "2026-08-05T11:02:00Z",
   "deleted_at": null }
@@ -287,6 +297,12 @@ The note object:
 
 `notebook_id` is the note's home. Null is an unfiled note. Like
 `class_id` on a notebook it may name a notebook the server has not seen.
+
+`page_order` is the note's position in a collegebook, and null for every
+note that is not a page. It is a **float**, not an integer: a page inserted
+between two others takes the midpoint of their two orders, so one row
+changes instead of every page after it. A client that sends `1.5` reads
+`1.5` back. Nothing server-side assigns, compacts or renumbers it.
 
 `class_id` on a note is **vestigial and must always be null**. It is an
 integer, it predates client-minted ids, and nothing writes it any more;
@@ -400,7 +416,7 @@ client's rule, not this endpoint's.
 | Status | Body | When |
 |--------|------|------|
 | 200 | results | the batch was processed, whatever each row's outcome |
-| 400 | error | a row in any array is malformed: a bad id, a `class_id` or `notebook_id` that is not a UUID, an unknown `visibility`, a title or name over 200 characters, a negative `version`, or an `archived_at` or `deleted_at` that is not RFC 3339. Nothing is written; the message names the row |
+| 400 | error | a row in any array is malformed: a bad id, a `class_id` or `notebook_id` that is not a UUID, an unknown `visibility`, an unknown notebook `kind`, a title or name over 200 characters, a negative `version`, or an `archived_at` or `deleted_at` that is not RFC 3339. Nothing is written; the message names the row |
 | 401 | error | `authentication required` |
 | 403 | error | missing or invalid `X-CSRF-Token` |
 | 413 | error | over 100 rows in any one array, or over 1 MB; the message names the array |

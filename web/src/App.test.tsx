@@ -16,8 +16,19 @@ import {
   writeLastClassId,
   writeLastWrittenClassId,
 } from './db/classes.ts'
-import { createNotebook, listNotebooks } from './db/notebooks.ts'
-import { countNotes, createNote, deleteNote, listNotes } from './db/notes.ts'
+import {
+  createCollegebook,
+  createNotebook,
+  listNotebooks,
+} from './db/notebooks.ts'
+import {
+  countNotes,
+  createNote,
+  createPage,
+  deleteNote,
+  listNotes,
+  listPages,
+} from './db/notes.ts'
 import { db } from './db/schema.ts'
 import i18n from './i18n/index.ts'
 import { OfflineError } from './sync/api.ts'
@@ -75,6 +86,14 @@ class NoopResizeObserver {
   disconnect() {}
 }
 window.ResizeObserver ??= NoopResizeObserver
+
+// jsdom has no IntersectionObserver either, and the reading view builds one
+// to decide which pages to mount. Silent here on purpose: which pages a book
+// mounts is Collegebook.test.tsx's subject, and it drives a fake it can
+// deliver entries through. With this one the first pages are built and
+// nothing else moves, which is all these tests need.
+window.IntersectionObserver ??=
+  NoopResizeObserver as unknown as typeof IntersectionObserver
 
 describe('App', () => {
   beforeEach(async () => {
@@ -1371,5 +1390,103 @@ describe('App table of contents', () => {
     await waitFor(() => expect(noteRows()).toHaveLength(0))
     expect(window.confirm).toHaveBeenCalled()
     expect(await countNotes()).toBe(0)
+  })
+})
+
+describe('App collegebooks', () => {
+  // Not the `open` two blocks up: that one is local to its describe, and the
+  // name resolves to window.open out here, which silently does nothing.
+  const openClass = async (name: string) => {
+    fireEvent.click(await screen.findByRole('button', { name: RegExp(`^${name}`) }))
+    return screen.findByRole('heading', { name })
+  }
+
+  beforeEach(async () => {
+    await db.notes.clear()
+    await db.classes.clear()
+    await db.notebooks.clear()
+    await db.meta.clear()
+    await i18n.changeLanguage('en')
+    vi.mocked(me).mockResolvedValue(account)
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    )
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  // Loose notes and collegebooks are different objects. One list holding both
+  // would make them look like the same kind of thing, which is the decision
+  // that has to survive here.
+  it('shows collegebooks as cards and notes as a list, in two sections', async () => {
+    const cls = await seedClass('Diskrétna matematika', [
+      ['Množiny', afterMidnight()],
+    ])
+    const book = await createCollegebook('Prednášky', cls.id)
+    await createPage(book.id)
+    render(<App />)
+
+    await openClass('Diskrétna matematika')
+    await waitFor(() => expect(noteRows()).toHaveLength(1))
+
+    // The book is a card, and it is not one of the rows in the table of
+    // contents.
+    const card = await screen.findByRole('button', { name: /^Prednášky/ })
+    expect(card.className).toContain('book-card')
+    within(card).getByText('2 pages')
+    expect(noteRows()).toHaveLength(1)
+    expect(noteRows()[0]!.textContent).toContain('Množiny')
+
+    // And its pages are not notes on the shelf: they are read inside the
+    // book, and the class page must not list them.
+    expect(screen.queryByRole('button', { name: /^Untitled/ })).toBeNull()
+  })
+
+  it('opens a collegebook, and n inside it makes a page rather than a note', async () => {
+    const cls = await seedClass('Diskrétna matematika')
+    const book = await createCollegebook('Prednášky', cls.id)
+    render(<App />)
+    await openClass('Diskrétna matematika')
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Prednášky/ }))
+
+    // The book's own page, in an editor of its own.
+    await waitFor(() => expect(document.querySelectorAll('.tiptap')).toHaveLength(1))
+    // The way back is the editor's: the class it belongs to.
+    screen.getByRole('button', { name: 'Back to Diskrétna matematika' })
+
+    fireEvent.keyDown(window, { key: 'n' })
+
+    // A page in this book, not a note on the shelf. It is the same gesture
+    // meaning "somewhere to write" in both places.
+    await waitFor(async () => expect(await listPages(book.id)).toHaveLength(2))
+    expect(await listNotes(null)).toHaveLength(0)
+  })
+
+  it('creates a collegebook with its first page from the card', async () => {
+    await seedClass('Diskrétna matematika')
+    render(<App />)
+    await openClass('Diskrétna matematika')
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: '+ New collegebook' }),
+    )
+    fireEvent.change(screen.getByRole('textbox', { name: 'Collegebook name' }), {
+      target: { value: 'Prednášky' },
+    })
+    fireEvent.submit(screen.getByRole('textbox', { name: 'Collegebook name' }))
+
+    // Straight into it, and with somewhere to write already in it.
+    await waitFor(() => expect(document.querySelectorAll('.tiptap')).toHaveLength(1))
+    const [created] = await db.notebooks
+      .filter((row) => row.kind === 'collegebook')
+      .toArray()
+    expect(created).toMatchObject({ name: 'Prednášky', dirty: true })
+    expect(await listPages(created!.id)).toHaveLength(1)
   })
 })

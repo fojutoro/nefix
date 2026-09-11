@@ -29,6 +29,19 @@ export function scopeOf(
   selection: Selection,
   notebooks: Notebook[],
 ): (note: Note) => boolean {
+  const within = shelfOf(selection, notebooks)
+  // A page is a note in a notebook that belongs to a class, so without this
+  // it appears in the class's contents, in Today and in every search — three
+  // lists where a page torn out of its book is wrong. The guard sits here
+  // because those three lists share this predicate and nothing else. A
+  // collegebook is read as a book, from its own screen.
+  return (note) => note.pageOrder === null && within(note)
+}
+
+function shelfOf(
+  selection: Selection,
+  notebooks: Notebook[],
+): (note: Note) => boolean {
   if (selection.kind === 'unfiled') return (note) => note.notebookId === null
   if (selection.kind === 'today') {
     const since = midnight()

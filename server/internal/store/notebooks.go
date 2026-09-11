@@ -20,6 +20,10 @@ type Notebook struct {
 	// that rule lives in the UI: nothing in this package or the schema
 	// enforces it.
 	IsGeneral bool
+	// 'notes' or 'collegebook'. Validated at the handler rather than by the
+	// column, so an unknown kind from a newer client is a 400 and not a
+	// constraint failure that breaks its sync.
+	Kind      string
 	Version   int64
 	Seq       int64
 	CreatedAt time.Time
@@ -32,11 +36,12 @@ type NotebookInput struct {
 	ClassID   *string
 	Name      string
 	IsGeneral bool
+	Kind      string
 	Version   int64
 	DeletedAt *time.Time
 }
 
-const notebookColumns = `id, author_id, class_id, name, is_general,
+const notebookColumns = `id, author_id, class_id, name, is_general, kind,
 	version, seq, created_at, updated_at, deleted_at`
 
 func scanNotebook(r row) (*Notebook, error) {
@@ -44,7 +49,7 @@ func scanNotebook(r row) (*Notebook, error) {
 	var createdAt, updatedAt string
 	var deletedAt sql.NullString
 
-	err := r.Scan(&n.ID, &n.AuthorID, &n.ClassID, &n.Name, &n.IsGeneral,
+	err := r.Scan(&n.ID, &n.AuthorID, &n.ClassID, &n.Name, &n.IsGeneral, &n.Kind,
 		&n.Version, &n.Seq, &createdAt, &updatedAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -91,20 +96,29 @@ func (db *DB) UpsertNotebook(ctx context.Context, userID int64, in NotebookInput
 		return nil, err
 	}
 
+	// A client that predates collegebooks sends no kind at all, and the column
+	// is NOT NULL. Defaulted here, the one place that writes it, so binding an
+	// empty string cannot defeat the column default the way a plain pass
+	// through would.
+	kind := in.Kind
+	if kind == "" {
+		kind = "notes"
+	}
+
 	if existing == nil {
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO notebooks (id, author_id, class_id, name, is_general,
+			`INSERT INTO notebooks (id, author_id, class_id, name, is_general, kind,
 				version, seq, deleted_at)
-			VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
-			in.ID, userID, in.ClassID, in.Name, in.IsGeneral,
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			in.ID, userID, in.ClassID, in.Name, in.IsGeneral, kind,
 			seq, nullTime(in.DeletedAt))
 	} else {
 		_, err = tx.ExecContext(ctx,
-			`UPDATE notebooks SET class_id = ?, name = ?, is_general = ?,
+			`UPDATE notebooks SET class_id = ?, name = ?, is_general = ?, kind = ?,
 				version = version + 1, seq = ?,
 				updated_at = datetime('now'), deleted_at = ?
 			WHERE id = ?`,
-			in.ClassID, in.Name, in.IsGeneral, seq, nullTime(in.DeletedAt), in.ID)
+			in.ClassID, in.Name, in.IsGeneral, kind, seq, nullTime(in.DeletedAt), in.ID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("writing notebook %s: %w", in.ID, err)
