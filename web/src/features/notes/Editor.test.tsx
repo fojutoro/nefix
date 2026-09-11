@@ -1,15 +1,32 @@
 import 'fake-indexeddb/auto'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { Editor as TipTap } from '@tiptap/core'
 import { Editor as BareEditor } from '@tiptap/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import i18n from '../../i18n/index.ts'
 import { db, type Note } from '../../db/schema.ts'
 import { updateNote } from '../../db/notes.ts'
+import CSS from '../../index.css?raw'
 import Editor, { editorExtensions, type OpenMath } from './Editor.tsx'
 import { outline } from './outline.ts'
 import { useAutosave } from './useAutosave.ts'
 
 const ID = '0199a0f0-0000-7000-8000-000000000001'
+
+// jsdom has no layout engine, so a Range has neither getClientRects nor
+// getBoundingClientRect, and ProseMirror's coordsAtPos asks for both before it
+// can say where a position sits. Zeros satisfy it. Nothing below asserts where
+// the menu landed — that is the part only an eye can check.
+const EMPTY_RECT = {
+  top: 0,
+  bottom: 0,
+  left: 0,
+  right: 0,
+  width: 0,
+  height: 0,
+} as DOMRect
+Range.prototype.getClientRects = () => [] as unknown as DOMRectList
+Range.prototype.getBoundingClientRect = () => EMPTY_RECT
 
 // Focusing scrolls the caret into view, which measures it, and jsdom has no
 // layout to measure. Nothing here tests scrolling.
@@ -434,5 +451,396 @@ describe('maths', () => {
     expect(money.editor.getMarkdown()).toBe('It costs $5 and $10 today.')
     money.editor.destroy()
     editor.destroy()
+  })
+})
+
+// The menu is driven entirely by the editor's own selection, so every test
+// below moves the selection through commands rather than through events. That
+// is the point of the "opens from a selection change" test: a `mouseup`
+// listener would satisfy a mouse-driven test and leave a finger with no way
+// to format anything.
+describe('bubble menu', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await i18n.changeLanguage('en')
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  const select = async (editor: TipTap, from: number, to: number) => {
+    await act(async () => {
+      editor.commands.setTextSelection({ from, to })
+    })
+  }
+
+  const menuIn = (container: HTMLElement) => container.querySelector('.bubble-menu')
+
+  const press = async (element: HTMLElement, key: string) => {
+    await act(async () => {
+      element.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      )
+    })
+  }
+
+  const click = async (element: HTMLElement) => {
+    await act(async () => {
+      element.click()
+    })
+  }
+
+  it('opens on a non-empty selection and stays shut on a collapsed one', async () => {
+    const { editor, container } = await open('bold me please', false)
+    expect(menuIn(container)).toBeNull()
+
+    await select(editor, 1, 5)
+    expect(menuIn(container)).not.toBeNull()
+
+    await select(editor, 3, 3)
+    expect(menuIn(container)).toBeNull()
+  })
+
+  // The mutation that matters. A `mouseup` implementation passes a test that
+  // clicks, and fails both halves of this one: nothing here dispatches a mouse
+  // event to open the menu, and the mouse event that is dispatched must not
+  // open it on its own.
+  it('opens from a selection change rather than from a mouse event', async () => {
+    const { editor, container } = await open('bold me please', false)
+    const dom = container.querySelector('.tiptap') as HTMLElement
+
+    await act(async () => {
+      dom.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+    })
+    expect(menuIn(container)).toBeNull()
+
+    await select(editor, 1, 5)
+    expect(menuIn(container)).not.toBeNull()
+  })
+
+  it('closes on Escape and leaves the selection where it was', async () => {
+    const { editor, container } = await open('bold me please', false)
+    await select(editor, 1, 5)
+    expect(menuIn(container)).not.toBeNull()
+
+    await press(container.querySelector('.tiptap') as HTMLElement, 'Escape')
+
+    expect(menuIn(container)).toBeNull()
+    expect(editor.state.selection.from).toBe(1)
+    expect(editor.state.selection.to).toBe(5)
+  })
+
+  it('applies bold to the selection and shows the button as active', async () => {
+    const { editor, container } = await open('bold me please', false)
+    await select(editor, 1, 5)
+
+    expect(screen.getByLabelText('Bold').getAttribute('aria-pressed')).toBe('false')
+    await click(screen.getByLabelText('Bold'))
+
+    expect(editor.getMarkdown()).toBe('**bold** me please')
+    expect(screen.getByLabelText('Bold').getAttribute('aria-pressed')).toBe('true')
+    expect(menuIn(container)).not.toBeNull()
+  })
+
+  it('toggles a heading level, and toggles it back to paragraph', async () => {
+    const { editor } = await open('a line', false)
+    await select(editor, 1, 3)
+
+    await click(screen.getByLabelText('Heading 2'))
+    // The serialiser ends a heading with a blank line, the way the existing
+    // block-maths test already allows for.
+    expect(editor.getMarkdown().replace(/\n*$/, '')).toBe('## a line')
+    expect(screen.getByLabelText('Heading 2').getAttribute('aria-pressed')).toBe('true')
+
+    await click(screen.getByLabelText('Heading 2'))
+    expect(editor.getMarkdown().replace(/\n*$/, '')).toBe('a line')
+  })
+
+  it('prefills the link input, commits a new href, and removes on empty', async () => {
+    const { editor } = await open('see [the docs](https://old.example) here', false)
+    await select(editor, 5, 13)
+
+    await click(screen.getByLabelText('Link'))
+    const input = screen.getByLabelText('Link URL') as HTMLInputElement
+    expect(input.value).toBe('https://old.example')
+
+    input.value = 'https://new.example'
+    await press(input, 'Enter')
+    expect(editor.getMarkdown()).toBe('see [the docs](https://new.example) here')
+
+    await select(editor, 5, 13)
+    await click(screen.getByLabelText('Link'))
+    const again = screen.getByLabelText('Link URL') as HTMLInputElement
+    again.value = ''
+    await press(again, 'Enter')
+    expect(editor.getMarkdown()).toBe('see the docs here')
+  })
+
+  it('wraps the selection in a formula whose latex is the selected text', async () => {
+    const { editor, container } = await open('area a^2+b^2 here', false)
+    await select(editor, 6, 13)
+
+    await click(screen.getByLabelText('Formula'))
+
+    expect(editor.getMarkdown()).toBe('area $a^2+b^2$ here')
+    expect(
+      container.querySelector('[data-type="inline-math"]')?.getAttribute('data-latex'),
+    ).toBe('a^2+b^2')
+    // And the source field is over it, so the formula can be corrected
+    // without retyping it.
+    expect((screen.getByLabelText('Formula, LaTeX') as HTMLInputElement).value).toBe(
+      'a^2+b^2',
+    )
+  })
+
+  // Clicking a formula makes a NodeSelection, which is not empty. A menu that
+  // only asks "is the selection empty?" opens on top of the formula source
+  // field and takes the focus the field needs.
+  it('stays shut on a node selection, so it cannot cover the formula field', async () => {
+    const { editor, container } = await open('inline $x^2$ here', false)
+    let mathPos = -1
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'inlineMath') mathPos = pos
+    })
+    expect(mathPos).toBeGreaterThan(-1)
+
+    await act(async () => {
+      editor.commands.setNodeSelection(mathPos)
+    })
+
+    // Not empty, so the naive guard would have opened the menu here.
+    expect(editor.state.selection.empty).toBe(false)
+    expect(menuIn(container)).toBeNull()
+  })
+
+  // The interaction most likely to break: the menu must not sit over the
+  // formula source field or hold the focus that field needs. With the editor
+  // focused — the only way a person reaches this — the field taking focus
+  // blurs the document, and the blur is what closes the menu.
+  it('gives way to the formula source field', async () => {
+    const { editor, container } = await open('pick me $x^2$ here', false)
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection({ from: 1, to: 5 })
+    })
+    // focus() lands in a requestAnimationFrame, so the DOM focus it is about
+    // to take is not taken yet.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+    expect(menuIn(container)).not.toBeNull()
+
+    await act(async () => {
+      container
+        .querySelector('[data-type="inline-math"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('.math-source')).not.toBeNull()
+    expect(menuIn(container)).toBeNull()
+    expect(document.activeElement).toBe(container.querySelector('.math-source'))
+  })
+
+  it('renders display maths in a centred block wrapper', async () => {
+    const { container } = await open('$$\na^2+b^2=c^2\n$$', false)
+
+    const wrapper = container.querySelector('[data-type="block-math"]')
+    expect(wrapper?.tagName).toBe('DIV')
+    // KaTeX only emits .katex-display in display mode, and display mode is
+    // what centres it. Without it the formula renders inline, flush left.
+    expect(wrapper?.querySelector('.katex-display')).not.toBeNull()
+  })
+})
+
+// Structural only, and worth being exact about what that buys. The stylesheet
+// is not loaded when a component renders under vitest — CSS imports are
+// stubbed — so it is injected here from the same file the app ships. jsdom
+// applies the cascade but returns *specified* values: it resolves neither
+// var() nor rem, and it performs no layout at all. So these prove which token
+// each level was given and that the tokens descend. They cannot prove a
+// rendered pixel size, a line length, or that any of it is legible. Nothing
+// here has seen a screen.
+describe('editor typography', () => {
+  // ?raw rather than node:fs: the app's tsconfig types only the browser, and
+  // widening it to Node so a test can read a file is how `fs` ends up
+  // imported into a PWA. Vite hands the file over as a string either way.
+  const mounted: HTMLElement[] = []
+
+  afterEach(() => {
+    while (mounted.length > 0) mounted.pop()!.remove()
+  })
+
+  const paint = (html: string) => {
+    const style = document.createElement('style')
+    style.textContent = CSS
+    document.head.appendChild(style)
+    const editor = document.createElement('div')
+    editor.className = 'editor'
+    editor.innerHTML = `<div class="tiptap">${html}</div>`
+    document.body.appendChild(editor)
+    mounted.push(style, editor)
+    return editor.firstElementChild as HTMLElement
+  }
+
+  // The declared value of a :root token, read out of the same stylesheet, so
+  // the scale is checked against what ships rather than against a number
+  // copied into the test.
+  const remOf = (token: string) => {
+    const declared = new RegExp(`--${token}:\\s*([^;]+);`).exec(CSS)
+    if (declared === null) throw new Error(`index.css declares no --${token}`)
+    const size = /^([\d.]+)rem$/.exec(declared[1]!.trim())
+    if (size === null) throw new Error(`--${token} is ${declared[1]}, not a rem`)
+    return Number(size[1])
+  }
+
+  const tokenOf = (element: Element) => {
+    const declared = getComputedStyle(element).fontSize.trim()
+    const name = /^var\(--([\w-]+)\)$/.exec(declared)
+    if (name === null) throw new Error(`font-size is "${declared}", not a token`)
+    return name[1]!
+  }
+
+  it('gives h1, h2 and h3 three different sizes, descending, all above body', () => {
+    const tiptap = paint('<h1>a</h1><h2>b</h2><h3>c</h3><h4>d</h4><p>e</p>')
+    const levels = ['h1', 'h2', 'h3'].map((tag) => tokenOf(tiptap.querySelector(tag)!))
+
+    // The old rule gave h1 and h2 both --title and h3 --body, so this is the
+    // assertion that was failing: six levels, two sizes.
+    expect(new Set(levels).size).toBe(3)
+
+    const sizes = levels.map(remOf)
+    expect(sizes[0]).toBeGreaterThan(sizes[1]!)
+    expect(sizes[1]).toBeGreaterThan(sizes[2]!)
+    // And the smallest of them is still larger than a paragraph. With the
+    // markdown syntax invisible, a heading that measures the same as body
+    // text is not a heading.
+    expect(sizes[2]).toBeGreaterThan(remOf('body'))
+
+    // h4 may share --body, but then it has to differ by weight.
+    const h4 = tiptap.querySelector('h4')!
+    expect(getComputedStyle(h4).fontWeight).not.toBe(
+      getComputedStyle(tiptap.querySelector('p')!).fontWeight,
+    )
+  })
+
+  it('gives a heading more space above it than below it', () => {
+    // h3, not h2: h2 carries its own margin-top override, so it would report
+    // that whatever the shared heading rule said.
+    const tiptap = paint('<h3>c</h3>')
+    const { marginTop, marginBottom } = getComputedStyle(tiptap.querySelector('h3')!)
+    // calc() and var() come back unresolved, so the --gap multiplier inside is
+    // what there is to compare; both margins are multiples of --gap by
+    // construction. Declared as longhands in the stylesheet precisely so both
+    // are readable here — jsdom does not expand a `margin` shorthand that
+    // contains calc(), and a missing value silently comparing as 1 is how this
+    // test passed against a scale it should have rejected.
+    const gaps = (margin: string) => {
+      if (margin === '') throw new Error('margin did not resolve; declare a longhand')
+      return Number(/\*\s*([\d.]+)/.exec(margin)?.[1] ?? '1')
+    }
+    expect(gaps(marginTop)).toBeGreaterThan(gaps(marginBottom))
+  })
+
+  it('sets no monospace face on the prose, and keeps one for code', () => {
+    const tiptap = paint('<p>a <code>b</code></p><pre><code>c</code></pre>')
+    expect(getComputedStyle(tiptap).fontFamily).not.toContain('mono')
+    expect(getComputedStyle(tiptap.querySelector('code')!).fontFamily).toContain('mono')
+  })
+
+  it('paints no ruling in the editor, and keeps it on the class page', () => {
+    const tiptap = paint('<p>a</p>')
+    expect(getComputedStyle(tiptap.parentElement!).backgroundImage).not.toContain(
+      'gradient',
+    )
+
+    // The same ruling on the surface it was always right for, so this says
+    // "moved" rather than "deleted".
+    const page = document.createElement('div')
+    page.className = 'page'
+    document.body.appendChild(page)
+    mounted.push(page)
+    expect(getComputedStyle(page).backgroundImage).toContain('gradient')
+  })
+})
+
+describe('links', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await i18n.changeLanguage('en')
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  const LINK = 'see [the docs](https://example.com) here'
+
+  it('renders a link that would open in a new tab safely', async () => {
+    const { container } = await open(LINK, false)
+    const anchor = container.querySelector('a')!
+
+    expect(anchor.getAttribute('href')).toBe('https://example.com')
+    expect(anchor.getAttribute('target')).toBe('_blank')
+    // The extension's default also carries nofollow, which is a publisher's
+    // concern and means nothing in a private note.
+    expect(anchor.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  // ProseMirror derives handleClick from its own mousedown/mouseup pair and
+  // asks posAtCoords where the pointer landed, which needs layout jsdom does
+  // not have. So the handler is driven through someProp — the same lookup
+  // ProseMirror itself uses — with the event a real click would carry. What
+  // this does not cover is ProseMirror's hit-testing, which is jsdom's gap
+  // rather than the handler's.
+  const clickLink = (editor: TipTap, container: HTMLElement, modifier: boolean) => {
+    const anchor = container.querySelector('a')!
+    const event = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      metaKey: modifier,
+    })
+    // Dispatched first, so the event carries the anchor as its target the way
+    // a real one does — target is read-only and only dispatch sets it.
+    anchor.dispatchEvent(event)
+    expect(event.target).toBe(anchor)
+    return editor.view.someProp('handleClick', (f) => f(editor.view, 1, event))
+  }
+
+  it('opens in a new tab on Cmd or Ctrl click', async () => {
+    const opened = vi.spyOn(window, 'open').mockReturnValue(null)
+    const { editor, container } = await open(LINK, false)
+
+    expect(clickLink(editor, container, true)).toBe(true)
+
+    // noopener,noreferrer here as well as in rel: rel governs a navigation the
+    // document starts, and a script-opened window is not one.
+    expect(opened).toHaveBeenCalledWith(
+      'https://example.com',
+      '_blank',
+      'noopener,noreferrer',
+    )
+  })
+
+  it('places the cursor on a plain click instead of navigating', async () => {
+    const opened = vi.spyOn(window, 'open').mockReturnValue(null)
+    const { editor, container } = await open(LINK, false)
+
+    // Not handled, so the click falls through to ProseMirror, which is what
+    // puts the caret in the link — and the caret is what the bubble menu's
+    // link input reads when a URL needs fixing.
+    expect(clickLink(editor, container, false)).toBeFalsy()
+    expect(opened).not.toHaveBeenCalled()
+
+    // The proof that a caret in a link is reachable at all: the input the
+    // bubble menu opens prefills from the link the selection sits in.
+    await act(async () => {
+      editor.commands.setTextSelection({ from: 5, to: 13 })
+    })
+    await act(async () => {
+      screen.getByLabelText('Link').click()
+    })
+    expect((screen.getByLabelText('Link URL') as HTMLInputElement).value).toBe(
+      'https://example.com',
+    )
   })
 })

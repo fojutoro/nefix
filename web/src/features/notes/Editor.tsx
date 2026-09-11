@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Editor as TipTap, InputRule } from '@tiptap/core'
+import { TextSelection } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import {
@@ -12,6 +13,7 @@ import { TaskList } from '@tiptap/extension-list/task-list'
 import { TaskItem } from '@tiptap/extension-list/task-item'
 import Image from '@tiptap/extension-image'
 import { observeNote } from '../../db/notes.ts'
+import BubbleMenu from './BubbleMenu.tsx'
 import { findMath } from './math.ts'
 
 // `@tiptap/extension-mathematics` tokenises inline maths with
@@ -124,9 +126,19 @@ export type OpenMath = (pos: number, latex: string, block: boolean) => void
 // eslint-disable-next-line react-refresh/only-export-components
 export function editorExtensions(openMath?: OpenMath) {
   return [
-    // Link rides along for round-trip fidelity only. Opening one on click
-    // would navigate away mid-sentence, and link editing is a later PR.
-    StarterKit.configure({ link: { openOnClick: false } }),
+    // openOnClick stays false because the extension's own handler opens on
+    // every plain click with no modifier check, which would navigate away
+    // mid-sentence and leave no way to put a caret in a link to fix its URL.
+    // The modifier-aware version is handleClick below.
+    StarterKit.configure({
+      link: {
+        openOnClick: false,
+        // The extension's default rel is 'noopener noreferrer nofollow'.
+        // nofollow withholds ranking credit from a page you link to, which is
+        // a publisher's concern; these notes are private and are not a page.
+        HTMLAttributes: { target: '_blank', rel: 'noopener noreferrer' },
+      },
+    }),
     Markdown,
     // Present so `![alt](url)` keeps its URL. There is no upload, no paste
     // handling and no UI: not eating an existing construct is not the same as
@@ -139,11 +151,34 @@ export function editorExtensions(openMath?: OpenMath) {
       onClick: (node, pos) => openMath?.(pos, node.attrs.latex, false),
     }),
     BlockMathSource.configure({
+      // The extension leaves katexOptions undefined, so KaTeX ran with its
+      // default displayMode: false and emitted an inline .katex — and
+      // .katex-display, the class that centres display maths and gives it its
+      // own line, was never in the document at all. The wrapper was a `div`
+      // the whole time; the containing block was never the problem.
+      katexOptions: { displayMode: true },
       onClick: (node, pos) => openMath?.(pos, node.attrs.latex, true),
       onOpen: (pos: number) => openMath?.(pos, '', true),
     }),
   ]
 }
+
+type Menu = {
+  // Carried rather than read off the ref at render time: the menu only ever
+  // exists because an editor event created it, so the instance is in hand at
+  // the point the position is measured.
+  editor: TipTap
+  top: number
+  left: number
+  below: boolean
+  link: boolean
+}
+
+// Roughly what the menu stands, and the only thing the number decides is
+// whether a selection near the top of the pane gets its menu above or below.
+// Measuring the real element would mean rendering it somewhere to be measured
+// and then moving it, for an answer this close.
+const MENU_HEIGHT = 52
 
 type Editing = {
   pos: number
@@ -177,6 +212,12 @@ export default function Editor({
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<TipTap | null>(null)
   const [editing, setEditing] = useState<Editing | null>(null)
+  const menuEl = useRef<HTMLDivElement>(null)
+  const [menu, setMenu] = useState<Menu | null>(null)
+  // Mirrored into a ref because editorProps are captured when the editor is
+  // built, so the key handlers hung there would otherwise read the menu as it
+  // was on mount and never see it open.
+  const menuNow = useRef<Menu | null>(null)
   // Whether the document holds a change the store has not taken yet. `dirty`
   // cannot answer that: it means IndexedDB differs from the server, not that
   // the document differs from IndexedDB. Between a keystroke and autosave
@@ -209,6 +250,52 @@ export default function Editor({
     })
   }, [])
 
+  const place = useCallback((next: Menu | null) => {
+    menuNow.current = next
+    setMenu(next)
+  }, [])
+
+  // Driven by the selection rather than by a mouse event, because a finger
+  // selecting text fires no mouseup the way a mouse does, and iPad is a
+  // target. Everything that moves the selection — dragging, shift-arrow, a
+  // command — opens the menu the same way.
+  const refresh = useCallback(() => {
+    const current = view.current
+    const box = scroll.current
+    if (current === null || box === null) return
+    const { selection } = current.state
+    // A NodeSelection is not empty either, and clicking a formula makes one.
+    // Asking only whether the selection is empty puts this menu on top of the
+    // formula source field and takes the focus that field needs.
+    if (!(selection instanceof TextSelection) || selection.empty) {
+      place(null)
+      return
+    }
+    const at = current.view.coordsAtPos(selection.from)
+    const bounds = box.getBoundingClientRect()
+    // Above the selection, so it does not cover the words being formatted,
+    // unless there is no room above to be had.
+    const below = at.top - bounds.top < MENU_HEIGHT
+    const edge = below ? current.view.coordsAtPos(selection.to).bottom : at.top
+    // Offsets inside the scroll container, like the formula field, so the
+    // menu travels with the text rather than hanging in the viewport.
+    place({
+      editor: current,
+      top: edge - bounds.top + box.scrollTop,
+      left: at.left - bounds.left + box.scrollLeft,
+      below,
+      link: false,
+    })
+  }, [place])
+
+  const setLinkOpen = useCallback(
+    (open: boolean) => {
+      const current = menuNow.current
+      if (current !== null) place({ ...current, link: open })
+    },
+    [place],
+  )
+
   useEffect(() => {
     // TipTap owns the document from here on. Nothing re-renders it as a
     // controlled value: that fights the editor and loses the cursor.
@@ -218,10 +305,69 @@ export default function Editor({
       extensions: editorExtensions(openMath),
       content: latest.current.initialBody,
       contentType: 'markdown',
-      editorProps: { attributes: { 'aria-label': latest.current.label } },
+      editorProps: {
+        attributes: { 'aria-label': latest.current.label },
+        // Cmd on Apple hardware, Ctrl elsewhere — the chord that opens a link
+        // in a new tab everywhere else. Without a modifier this returns false
+        // and the click falls through to ProseMirror, which places the cursor:
+        // that is what makes a wrong URL fixable, because the bubble menu's
+        // link input reads the link the cursor is sitting in.
+        handleClick: (_view, _pos, event) => {
+          if (!event.metaKey && !event.ctrlKey) return false
+          const target = event.target
+          const href =
+            target instanceof Element
+              ? target.closest('a')?.getAttribute('href')
+              : undefined
+          if (!href) return false
+          event.preventDefault()
+          // noopener,noreferrer in the features string as well as in rel: rel
+          // governs a navigation the document starts, and this is a window
+          // opened by script, which rel does not reach.
+          window.open(href, '_blank', 'noopener,noreferrer')
+          return true
+        },
+        handleKeyDown: (_view, event) => {
+          if (event.key === 'Escape' && menuNow.current !== null) {
+            // stopPropagation as well: App's Escape handler is on the window
+            // and never asks whether anyone has dealt with the key already,
+            // so without this the note closes behind the menu. The selection
+            // is left exactly as it was.
+            event.preventDefault()
+            event.stopPropagation()
+            place(null)
+            return true
+          }
+          // The universal binding, and the only one here that StarterKit does
+          // not already ship. It means nothing without something to link, so
+          // a collapsed selection leaves the key to the browser.
+          if (
+            event.key === 'k' &&
+            (event.metaKey || event.ctrlKey) &&
+            menuNow.current !== null
+          ) {
+            event.preventDefault()
+            setLinkOpen(true)
+            return true
+          }
+          return false
+        },
+      },
+      onSelectionUpdate: refresh,
       onUpdate: ({ editor }) => {
         unsaved.current = true
         latest.current.onChange(editor.getMarkdown())
+        // Toggling a mark moves nothing, so selectionUpdate does not fire and
+        // the buttons would go on showing the state from before the click.
+        refresh()
+      },
+      onBlur: ({ event }) => {
+        const next = event.relatedTarget
+        // Focus landing inside the menu is the link input opening, not the
+        // user leaving. Anything else closes it — including the formula
+        // source field, which is how the two stay out of each other's way.
+        if (next instanceof Node && menuEl.current?.contains(next)) return
+        place(null)
       },
     })
     view.current = created
@@ -235,8 +381,9 @@ export default function Editor({
       created.destroy()
       view.current = null
       setEditing(null)
+      place(null)
     }
-  }, [noteId, openMath])
+  }, [noteId, openMath, place, refresh, setLinkOpen])
 
   // A pull writes a new body into the row while TipTap still holds the old one
   // in its own document, and the next keystroke would push the stale text
@@ -306,6 +453,23 @@ export default function Editor({
     close()
   }
 
+  // The selected words become the formula's source, so a line of maths that
+  // was typed as prose can be turned into maths without retyping it.
+  const wrapMath = () => {
+    const current = view.current
+    if (current === null) return
+    const { from, to } = current.state.selection
+    const latex = current.state.doc.textBetween(from, to)
+    current
+      .chain()
+      .insertContentAt({ from, to }, { type: 'inlineMath', attrs: { latex } })
+      .run()
+    place(null)
+    // The node sits at `from` now. Opening the source field over it is what
+    // makes it correctable: prose rarely comes out as valid LaTeX first time.
+    openMath(from, latex, false)
+  }
+
   const cancel = () => {
     // Escape restores what was there, except that a formula opened empty by
     // `$$ ` has nothing to restore and should not survive being abandoned.
@@ -316,6 +480,18 @@ export default function Editor({
   return (
     <div className="editor" ref={scroll}>
       <div ref={host} />
+      {menu !== null && (
+        <BubbleMenu
+          ref={menuEl}
+          editor={menu.editor}
+          top={menu.top}
+          left={menu.left}
+          below={menu.below}
+          link={menu.link}
+          onLink={setLinkOpen}
+          onMath={wrapMath}
+        />
+      )}
       {editing !== null && (
         <input
           // Keyed by position so moving to another formula remounts the field

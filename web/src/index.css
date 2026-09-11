@@ -33,10 +33,16 @@
      as a table. */
   --rule: #c9536a;
 
-  /* Five sizes, and there is no sixth anywhere in this file. Two sizes with
-     nothing between them is why nothing grouped: a card title had to be
-     either a heading or body text, and it is neither. */
+  /* Six sizes. The sixth was added for the editor, and the reason is the same
+     reason the fifth exists: two sizes with nothing between them is why
+     nothing grouped. A note has three heading levels above its body text, and
+     five sizes could only give it two — h3 came out at --body, so a heading
+     measured exactly like a paragraph and only weight said otherwise. With
+     the markdown syntax now invisible in the editor, that is not a heading at
+     all. --section fills the 1.79 jump between --title and --display and
+     makes the scale 34 / 24 / 19 / 15: steps of 1.42, 1.26, 1.27. */
   --display: 2.125rem;
+  --section: 1.5rem;
   --title: 1.1875rem;
   --body: 0.9375rem;
   --small: 0.8125rem;
@@ -712,20 +718,16 @@ input:-webkit-autofill:focus {
   padding: var(--gap);
 }
 
-/* Ruled here too, on the container and behind the text rather than under each
-   line: a KaTeX formula is taller than a line of type, so the lines and the
-   ruling cannot stay in register. They do not need to — a ruled page with
-   text on it is the look, and `local` is what makes the ruling travel with
-   the text instead of sitting still while it scrolls. */
+/* No ruling here, and this is the second time that conclusion has been
+   reached in this file: see .page, where the ruling was deliberately kept off
+   the editor because a rendered formula is taller than a line of type. It was
+   added here anyway, with a comment conceding the lines could not stay in
+   register. Ruled paper promises that every line sits on a rule. A document
+   with headings, lists, code blocks and KaTeX cannot keep that promise
+   without locking all of them to a grid, and KaTeX sizes display maths from
+   the formula's own contents. The ruling is the class page's signature; the
+   editor is clean cream. */
 .editor {
-  background-attachment: local;
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent calc(var(--line) - 1px),
-    var(--ruling) calc(var(--line) - 1px),
-    var(--ruling) var(--line)
-  );
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -734,18 +736,30 @@ input:-webkit-autofill:focus {
   position: relative;
 }
 
-/* Monospace, because this holds markdown and LaTeX, at the body size, because
-   a sixth size for one surface is how five sizes becomes eleven. */
+/* Proportional, and this is the change the rest of this block follows from.
+   The stylesheet set monospace here and then said, over the heading rule,
+   that rendered prose "leaves the monospace stack" — but `font-family:
+   inherit` on a heading inherits from this element, so it resolved straight
+   back to monospace and the rule did nothing. Every character in the editor
+   was monospace, headings included. Setting nothing here lets :root's
+   system-ui through; monospace is now declared only where it means
+   something, on code, pre and the LaTeX field.
+
+   38em rather than the old 68ch. 68ch was measured against monospace —
+   0.6em a character, so 40.8em, about 68 characters, which was already a
+   correct measure and never the bug it looked like. The same character count
+   set proportionally is physically narrower, not wider, so this is deliberately
+   the wide end of the comfortable band: 38em is roughly 72 to 78 characters.
+   Past about 80 the eye loses the start of the next line, however much pane
+   is left over. Held against the margin rule rather than centred: the rule is
+   the content pane's own, continuing, and centring would strand it far to the
+   left. */
 .editor .tiptap {
-  font-family: ui-monospace, monospace;
   font-size: var(--body);
-  /* The ruling's pitch, so the two at least share a rhythm. */
-  line-height: var(--line);
-  /* A full-width line of monospace on a wide display is unreadable, and it is
-     why this pane looked like a blank page with a stray formula on it. Held
-     against the margin rule rather than centred: the rule is the content
-     pane's own, continuing, and centring would strand it far to the left. */
-  max-width: 68ch;
+  /* A ratio rather than the --line pitch: nothing has to register with a
+     ruling any more, and 1.6 is what proportional text at this size wants. */
+  line-height: 1.6;
+  max-width: 38em;
   min-height: 100%;
   padding: var(--gap) calc(var(--gap) * 3) calc(var(--gap) * 8)
     calc(var(--margin) + var(--gap) * 3);
@@ -757,42 +771,232 @@ input:-webkit-autofill:focus {
   outline: none;
 }
 
-/* Rendered headings and prose leave the monospace stack: the syntax is gone
-   from the document, so there is no raw markdown left for it to line up. */
+/* Three real sizes above body text, because with the syntax invisible the
+   size IS the structure. The old rule gave six levels two sizes — h1 and h2
+   identical, h3 to h6 identical to a paragraph — so a document had one
+   visible level of hierarchy and looked flat. Space above each is three to
+   four times the space below, so a heading reads as belonging to what
+   follows it rather than floating between two blocks. */
 .editor .tiptap :is(h1, h2, h3, h4, h5, h6) {
-  font-family: inherit;
   font-weight: 600;
   letter-spacing: -0.01em;
-  margin: calc(var(--gap) * 3) 0 var(--gap);
+  line-height: 1.25;
+  /* Longhands rather than the shorthand so the ratio is readable — and
+     assertable — one property at a time. */
+  margin-bottom: var(--gap);
+  margin-top: calc(var(--gap) * 4);
 }
 
-.editor .tiptap :is(h1, h2) {
+/* The note's own title, which is the first line of nearly every note, at the
+   size the class page and the sign-in screen give their titles. A note opening
+   with a page title is the point. */
+.editor .tiptap h1 {
+  font-size: var(--display);
+  letter-spacing: -0.02em;
+  /* Nothing above the first line of a note. */
+  margin-top: 0;
+}
+
+.editor .tiptap h2 {
+  font-size: var(--section);
+  margin-top: calc(var(--gap) * 5);
+}
+
+.editor .tiptap h3 {
   font-size: var(--title);
 }
 
-.editor .tiptap :is(h3, h4, h5, h6) {
+/* Sharing --body and separated by weight and colour, as three more distinct
+   sizes below --title would land under the paragraph text they head. h5 and
+   h6 are deliberately identical: a 570px column has no room for six visibly
+   different levels, and notes that reach h5 are vanishingly rare. */
+.editor .tiptap :is(h4, h5, h6) {
   font-size: var(--body);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.editor .tiptap :is(h5, h6) {
+  color: var(--text-muted);
 }
 
 .editor .tiptap :is(p, ul, ol, blockquote, pre, table) {
-  margin: 0 0 var(--gap);
+  margin: 0 0 calc(var(--gap) * 1.5);
 }
 
+/* 8px rather than the 12px every other block above gets. Two short
+   consecutive paragraphs at 12px read as two separate things; a list or a
+   code block is a different kind of block and can still afford the wider
+   gap, which is why this narrows p alone and leaves the rule above intact. */
+.editor .tiptap p {
+  margin-bottom: var(--gap);
+}
+
+/* The one element in this stylesheet that never got a colour: links were
+   browser blue on a cream and crimson page, and browser purple once visited.
+   The underline stays. With the markdown syntax invisible, colour is the only
+   other thing marking a link, and colour alone is no signal at all to a reader
+   who cannot separate crimson from black text. :visited is pinned to the same
+   accent rather than given a second red the palette does not have. */
+.editor .tiptap a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.editor .tiptap a:visited {
+  color: var(--accent);
+}
+
+/* Hover thickens the underline instead of shifting the colour, for the same
+   reason: there is one red. */
+.editor .tiptap a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* --border, not --ruling. The ruling is 1.03:1 against the page — it is meant
+   to be seen only if you look for it, which is right for a ruled line behind
+   text and useless as the edge of a thing. */
 .editor .tiptap blockquote {
-  border-left: 2px solid var(--ruling);
+  border-left: 2px solid var(--border);
   color: var(--text-muted);
   padding-left: calc(var(--gap) * 2);
 }
 
+/* Markers outside the text, so wrapped lines align with the first line rather
+   than with the bullet. The nesting changes marker rather than indent alone:
+   at three levels deep the indent alone stops saying which list you are in. */
+.editor .tiptap :is(ul, ol) {
+  padding-left: calc(var(--gap) * 3);
+}
+
+.editor .tiptap li :is(ul, ol) {
+  margin-bottom: 0;
+}
+
+.editor .tiptap ul {
+  list-style: disc;
+}
+
+.editor .tiptap ul ul {
+  list-style: circle;
+}
+
+.editor .tiptap ul ul ul {
+  list-style: square;
+}
+
+.editor .tiptap ol {
+  list-style: decimal;
+}
+
+.editor .tiptap ol ol {
+  list-style: lower-alpha;
+}
+
+.editor .tiptap ol ol ol {
+  list-style: lower-roman;
+}
+
+/* Checkboxes are not list markers, so the list loses its own and the row
+   becomes a flex line. The label carries contenteditable=false from the
+   extension; it must not stretch. */
+.editor .tiptap ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.editor .tiptap ul[data-type='taskList'] > li {
+  display: flex;
+  gap: var(--gap);
+}
+
+.editor .tiptap ul[data-type='taskList'] > li > label {
+  flex: none;
+  /* Against the cap height of the first line rather than the middle of a
+     paragraph that may run to five lines. */
+  padding-top: 0.2em;
+}
+
+.editor .tiptap ul[data-type='taskList'] > li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor .tiptap input[type='checkbox'] {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* Monospace where it earns its place. 0.9em because a monospace face runs
+   large against system-ui at the same nominal size, and the two have to sit
+   on one line without the code looking shouted. */
+.editor .tiptap code {
+  background: var(--raised);
+  border-radius: 2px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+  padding: 1px 4px;
+}
+
+.editor .tiptap pre {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  /* A long line scrolls inside the block rather than widening the note. */
+  overflow-x: auto;
+  padding: var(--gap) calc(var(--gap) * 1.5);
+}
+
+/* The block already is the background; the code inside it must not draw a
+   second one. */
+.editor .tiptap pre code {
+  background: none;
+  border-radius: 0;
+  font-size: var(--small);
+  padding: 0;
+}
+
+.editor .tiptap hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: calc(var(--gap) * 4) 0;
+}
+
+.editor .tiptap table {
+  border-collapse: collapse;
+  /* The table takes the measure, so cells do not collapse to their content
+     and leave a ragged right edge mid-note. */
+  width: 100%;
+}
+
 .editor .tiptap :is(td, th) {
-  border: 1px solid var(--ruling);
-  padding: 0 var(--gap);
+  border: 1px solid var(--border);
+  padding: calc(var(--gap) * 0.5) var(--gap);
+  text-align: left;
+}
+
+.editor .tiptap th {
+  background: var(--raised);
+  font-weight: 600;
 }
 
 /* The whole formula highlights as one thing, because that is what it is: an
    atom the cursor cannot enter. Clicking it opens the field below. */
 .editor .tiptap .tiptap-mathematics-render--editable {
   cursor: pointer;
+}
+
+/* Display maths gets its own line and space round it. The centring itself is
+   not here: it arrives with KaTeX's .katex-display, which the extension only
+   emits once it is told displayMode: true — see Editor.tsx. All this rule
+   does is trade KaTeX's own 1em margin for the pane's rhythm. */
+.editor .tiptap [data-type='block-math'] {
+  margin: calc(var(--gap) * 2) 0;
+}
+
+.editor .tiptap .katex-display {
+  margin: 0;
 }
 
 .editor .tiptap .ProseMirror-selectednode {
@@ -811,7 +1015,7 @@ input:-webkit-autofill:focus {
    somewhere else is a field you have to go and find. */
 .math-source {
   background: var(--raised);
-  border: 1px solid var(--ruling);
+  border: 1px solid var(--border);
   border-radius: 2px;
   color: var(--text);
   font-family: ui-monospace, monospace;
@@ -820,6 +1024,65 @@ input:-webkit-autofill:focus {
   padding: 2px var(--gap);
   position: absolute;
   z-index: 1;
+}
+
+/* Over the words being formatted rather than beside them, because a toolbar
+   at the top of the pane is a toolbar you have to travel to. Same stacking
+   level as the formula field and earlier in the DOM, so if the two ever did
+   overlap the field would paint on top — it is the one holding the cursor. */
+.bubble-menu {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 2px 12px var(--lift-hover);
+  padding: 2px;
+  position: absolute;
+  z-index: 1;
+}
+
+/* Its own height plus a gap: the measurement anchors the menu to the top of
+   the selection, and this is what lifts it clear of the line. */
+.bubble-menu:not(.below) {
+  transform: translateY(calc(-100% - 4px));
+}
+
+.bubble-menu.below {
+  margin-top: 4px;
+}
+
+.bubble-row {
+  display: flex;
+  gap: 2px;
+}
+
+/* 44px each way. That is the smallest target a finger hits reliably, and it
+   is why this is a row of ten buttons and not a dense strip of twenty. */
+.bubble-menu button {
+  align-items: center;
+  border: 0;
+  display: flex;
+  font-family: ui-monospace, monospace;
+  font-size: var(--small);
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0;
+}
+
+.bubble-menu button:hover {
+  background: var(--lift-hover);
+}
+
+/* What the selection already is, readable at a glance: the point of showing
+   active state is that you can see it without trying a button to find out. */
+.bubble-menu button[aria-pressed='true'] {
+  background: var(--selection);
+}
+
+.bubble-link {
+  margin: 2px;
+  min-height: 44px;
+  min-width: 24ch;
 }
 
 .rail-toggle {
