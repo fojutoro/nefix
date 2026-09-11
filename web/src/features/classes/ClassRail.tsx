@@ -7,10 +7,12 @@ import {
 import { useTranslation } from 'react-i18next'
 import type { ClassWithRecency } from '../../db/classes.ts'
 import type { Class } from '../../db/schema.ts'
+import Icon, { type IconName } from '../../ui/Icon.tsx'
 import { relative, useMinute } from '../notes/relative.ts'
 import { keyOf, TODAY, type Selection } from './selection.ts'
 
 type RowProps = {
+  icon: IconName
   label: string
   current: boolean
   onClick: () => void
@@ -22,6 +24,7 @@ type RowProps = {
 }
 
 function Row({
+  icon,
   label,
   current,
   onClick,
@@ -42,6 +45,7 @@ function Row({
         onClick={onClick}
         style={colour == null ? undefined : ({ '--spine': colour } as CSSProperties)}
       >
+        <Icon name={icon} className="rail-icon" />
         <span className="rail-name" title={title}>
           {label}
         </span>
@@ -108,6 +112,7 @@ export default function ClassRail({
   const classRow = (row: Class, trailing: ReactNode) => (
     <Row
       key={row.id}
+      icon="graduation-cap"
       label={row.name}
       colour={row.colour}
       current={current === `class:${row.id}`}
@@ -124,6 +129,7 @@ export default function ClassRail({
           group of one is noise. */}
       <ul>
         <Row
+          icon="sun"
           label={t('rail.today')}
           current={current === 'today'}
           onClick={() => onSelect(TODAY)}
@@ -143,6 +149,7 @@ export default function ClassRail({
         <ul className="rail-rest">
           {unfiledCount > 0 && (
             <Row
+              icon="inbox"
               label={t('rail.unfiled')}
               current={current === 'unfiled'}
               onClick={() => onSelect({ kind: 'unfiled' })}
@@ -158,6 +165,7 @@ export default function ClassRail({
                 aria-expanded={showArchived}
                 onClick={() => setShowArchived(!showArchived)}
               >
+                <Icon name="archive" className="rail-icon" />
                 <span className="rail-name">{t('rail.archived')}</span>
               </button>
             </li>
