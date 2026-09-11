@@ -12,8 +12,11 @@ import { TableKit } from '@tiptap/extension-table'
 import { TaskList } from '@tiptap/extension-list/task-list'
 import { TaskItem } from '@tiptap/extension-list/task-item'
 import Image from '@tiptap/extension-image'
+import { useTranslation } from 'react-i18next'
 import { observeNote } from '../../db/notes.ts'
 import BubbleMenu from './BubbleMenu.tsx'
+import BlockMenu from './BlockMenu.tsx'
+import { KEEP, filterBlocks, type Labelled, type Translate } from './blocks.ts'
 import { findMath } from './math.ts'
 
 // `@tiptap/extension-mathematics` tokenises inline maths with
@@ -188,6 +191,34 @@ type Editing = {
   left: number
 }
 
+// A `/` is a command only when it opens a word: at the start of a block, or
+// after a space. This is read off the text in front of the cursor rather than
+// from a keydown, because `http://x`, `24/7` and `and/or` all press the same
+// key and only the character before the slash tells them apart.
+const SLASH = /(?:^|\s)\/(\S*)$/
+
+// The gutter is --margin wide and the button fills it. The menu drops below
+// the button rather than beside it: beside it is on top of the block being
+// added to.
+const BUTTON = 44
+
+// Where the + button sits, and the start of the block it belongs to. The
+// position is what the button hands back — clicking it puts the cursor in that
+// block before inserting under it, so the pointer path and the cursor path end
+// in the same place.
+type Anchor = { top: number; pos: number }
+
+type Blocks = {
+  top: number
+  left: number
+  filter: string
+  // Position of the `/` that opened this, or null when the + button did. It is
+  // both the range a command deletes and the marker Escape remembers, so a
+  // dismissed menu does not spring back open on the next keystroke.
+  slash: number | null
+  picked: number
+}
+
 type Props = {
   noteId: string
   initialBody: string
@@ -218,6 +249,19 @@ export default function Editor({
   // built, so the key handlers hung there would otherwise read the menu as it
   // was on mount and never see it open.
   const menuNow = useRef<Menu | null>(null)
+  const [anchor, setAnchor] = useState<Anchor | null>(null)
+  const [blocks, setBlocks] = useState<Blocks | null>(null)
+  const blockEl = useRef<HTMLDivElement>(null)
+  // Mirrored for the same reason menuNow is: the handlers below are captured
+  // when the editor is built and would otherwise read the state as it was on
+  // mount.
+  const blocksNow = useRef<Blocks | null>(null)
+  const editingNow = useRef<Editing | null>(null)
+  const translate = useRef<Translate>(() => '')
+  // The slash Escape dismissed. Without it the detection matches the very same
+  // text on the next keystroke and the menu comes straight back, which is the
+  // whole of what Escape is for here.
+  const dismissed = useRef<number | null>(null)
   // Whether the document holds a change the store has not taken yet. `dirty`
   // cannot answer that: it means IndexedDB differs from the server, not that
   // the document differs from IndexedDB. Between a keystroke and autosave
@@ -225,12 +269,29 @@ export default function Editor({
   // stale, and that is the window a pull used to overwrite. See #37.
   const unsaved = useRef(false)
   const latest = useRef({ initialBody, label, focus, onChange })
+  const { t } = useTranslation()
+  // Wrapped rather than passed straight through: filterBlocks wants one narrow
+  // signature and TFunction is a pile of overloads.
+  const say: Translate = (key, args) => t(key, args)
+  useEffect(() => {
+    translate.current = say
+  })
 
   // Declared before the editor effect so that on mount it runs first, and on a
   // note switch it has the new note's body ready for the rebuilt editor.
   useEffect(() => {
     latest.current = { initialBody, label, focus, onChange }
   })
+
+  const edit = useCallback((next: Editing | null) => {
+    editingNow.current = next
+    setEditing(next)
+  }, [])
+
+  const show = useCallback((next: Blocks | null) => {
+    blocksNow.current = next
+    setBlocks(next)
+  }, [])
 
   // Stable, because it is baked into the extensions when the editor is built.
   const openMath = useCallback((pos: number, latex: string, block: boolean) => {
@@ -241,14 +302,14 @@ export default function Editor({
     const bounds = box.getBoundingClientRect()
     // Offsets inside the scroll container rather than viewport coordinates, so
     // the field travels with the formula when the note is scrolled.
-    setEditing({
+    edit({
       pos,
       latex,
       block,
       top: at.bottom - bounds.top + box.scrollTop,
       left: at.left - bounds.left + box.scrollLeft,
     })
-  }, [])
+  }, [edit])
 
   const place = useCallback((next: Menu | null) => {
     menuNow.current = next
@@ -287,6 +348,156 @@ export default function Editor({
       link: false,
     })
   }, [place])
+
+  // Guarded on `top` alone, because that is the only thing the anchor decides
+  // visually and this runs on every keystroke. A cursor moving within one
+  // block gives the same block start, so writing a fresh object each time
+  // would re-render the pane for nothing.
+  const anchorAt = useCallback(
+    (current: TipTap, box: HTMLDivElement, pos: number) => {
+      const $pos = current.state.doc.resolve(pos)
+      const start = $pos.depth === 0 ? pos : $pos.start(1)
+      let at
+      try {
+        at = current.view.coordsAtPos(start)
+      } catch {
+        // coordsAtPos throws for a position the view has not drawn yet, and
+        // this runs once on mount, before there is any layout to measure. The
+        // button is a convenience; an uncaught throw here is the whole editor,
+        // so the previous anchor stands and the next selection change retries.
+        return
+      }
+      const bounds = box.getBoundingClientRect()
+      const top = at.top - bounds.top + box.scrollTop
+      setAnchor((prev) =>
+        prev !== null && prev.top === top && prev.pos === start
+          ? prev
+          : { top, pos: start },
+      )
+    },
+    [],
+  )
+
+  // Runs on every selection change and every document change, because both can
+  // move the cursor into or out of a `/` that is already typed.
+  const track = useCallback(() => {
+    const current = view.current
+    const box = scroll.current
+    if (current === null || box === null) return
+    const { selection } = current.state
+    anchorAt(current, box, selection.from)
+
+    // The + button's menu is not driven by the text and must not be closed by
+    // it: opening it moves the selection, which lands right back here.
+    const open = blocksNow.current
+    if (open !== null && open.slash === null) return
+
+    // A selection that is not empty belongs to the bubble menu, and the
+    // formula source field holds the cursor this menu would cover. Neither is
+    // a moment at which a second surface may open.
+    if (
+      !(selection instanceof TextSelection) ||
+      !selection.empty ||
+      editingNow.current !== null ||
+      !selection.$from.parent.isTextblock
+    ) {
+      show(null)
+      return
+    }
+    const { $from } = selection
+    const before = $from.parent.textBetween(0, $from.parentOffset, '\n', ' ')
+    const match = SLASH.exec(before)
+    if (match === null) {
+      // Out of the slash altogether, so whatever Escape dismissed is history.
+      dismissed.current = null
+      show(null)
+      return
+    }
+    const filter = match[1]!
+    const slash = selection.from - filter.length - 1
+    if (dismissed.current === slash) return
+    // Typing a sentence that begins with a slash must not trap anyone in a
+    // menu, so a filter that matches nothing closes it.
+    if (filterBlocks(filter, translate.current).length === 0) {
+      show(null)
+      return
+    }
+    const at = current.view.coordsAtPos(slash)
+    const bounds = box.getBoundingClientRect()
+    show({
+      top: at.bottom - bounds.top + box.scrollTop,
+      left: at.left - bounds.left + box.scrollLeft,
+      filter,
+      slash,
+      // Back to the top whenever the list changes underneath, or Enter runs
+      // whatever happens to be sitting at a stale index.
+      picked: open !== null && open.filter === filter ? open.picked : 0,
+    })
+  }, [anchorAt, show])
+
+  const runBlock = useCallback(
+    (item: Labelled) => {
+      const current = view.current
+      const open = blocksNow.current
+      if (current === null || open === null) return
+      show(null)
+      dismissed.current = null
+      if (open.slash === null) {
+        // Below the block rather than at the cursor: that is what a + in a
+        // margin means everywhere else, and inserting mid-paragraph would
+        // split text in a way nobody intends. What the command then runs on is
+        // an empty paragraph — exactly the state the slash path leaves behind,
+        // which is what makes the two triggers the same action and not two
+        // implementations that agree by luck.
+        const { $from } = current.state.selection
+        const at = $from.depth === 0 ? $from.pos : $from.after(1)
+        current
+          .chain()
+          .focus(null, KEEP)
+          .insertContentAt(at, { type: 'paragraph' })
+          .setTextSelection(at + 1)
+          .run()
+      } else {
+        current
+          .chain()
+          .focus(null, KEEP)
+          .deleteRange({ from: open.slash, to: current.state.selection.from })
+          .run()
+      }
+      item.command.run(current, (pos) => openMath(pos, '', true))
+    },
+    [openMath, show],
+  )
+
+  const moveBlock = useCallback(
+    (delta: number) => {
+      const open = blocksNow.current
+      if (open === null) return
+      const found = filterBlocks(open.filter, translate.current)
+      if (found.length === 0) return
+      show({
+        ...open,
+        picked: (open.picked + delta + found.length) % found.length,
+      })
+    },
+    [show],
+  )
+
+  // refocus is false when the menu is closing because the focus already went
+  // somewhere else, and taking it back would pull the user off whatever they
+  // just clicked.
+  const closeBlock = useCallback(
+    (refocus: boolean) => {
+      const open = blocksNow.current
+      if (open === null) return
+      // The `/` stays where it was typed: it is text that happened to open a
+      // menu, and closing the menu does not make it not text.
+      dismissed.current = open.slash
+      show(null)
+      if (refocus) view.current?.commands.focus(null, KEEP)
+    },
+    [show],
+  )
 
   const setLinkOpen = useCallback(
     (open: boolean) => {
@@ -328,6 +539,32 @@ export default function Editor({
           return true
         },
         handleKeyDown: (_view, event) => {
+          // The slash menu leaves the focus in the document, so its keys
+          // arrive here. The + button's menu takes focus and handles its own.
+          const block = blocksNow.current
+          if (block !== null && block.slash !== null) {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault()
+              moveBlock(event.key === 'ArrowDown' ? 1 : -1)
+              return true
+            }
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              const item = filterBlocks(block.filter, translate.current)[
+                block.picked
+              ]
+              if (item !== undefined) runBlock(item)
+              return true
+            }
+            if (event.key === 'Escape') {
+              // stopPropagation for the same reason the bubble menu does it:
+              // App's window handler would close the note behind the menu.
+              event.preventDefault()
+              event.stopPropagation()
+              closeBlock(true)
+              return true
+            }
+          }
           if (event.key === 'Escape' && menuNow.current !== null) {
             // stopPropagation as well: App's Escape handler is on the window
             // and never asks whether anyone has dealt with the key already,
@@ -353,13 +590,17 @@ export default function Editor({
           return false
         },
       },
-      onSelectionUpdate: refresh,
+      onSelectionUpdate: () => {
+        refresh()
+        track()
+      },
       onUpdate: ({ editor }) => {
         unsaved.current = true
         latest.current.onChange(editor.getMarkdown())
         // Toggling a mark moves nothing, so selectionUpdate does not fire and
         // the buttons would go on showing the state from before the click.
         refresh()
+        track()
       },
       onBlur: ({ event }) => {
         const next = event.relatedTarget
@@ -377,13 +618,31 @@ export default function Editor({
     if (latest.current.focus) {
       created.commands.focus(null, { scrollIntoView: false })
     }
+    // Once on mount, because nothing has moved the selection yet and the +
+    // button would otherwise not appear until the first keystroke — on a note
+    // opened and not yet typed in, which is exactly when someone is looking
+    // for a way to add a block.
+    track()
     return () => {
       created.destroy()
       view.current = null
-      setEditing(null)
+      edit(null)
+      show(null)
       place(null)
     }
-  }, [noteId, openMath, place, refresh, setLinkOpen])
+  }, [
+    closeBlock,
+    edit,
+    moveBlock,
+    noteId,
+    openMath,
+    place,
+    refresh,
+    runBlock,
+    setLinkOpen,
+    show,
+    track,
+  ])
 
   // A pull writes a new body into the row while TipTap still holds the old one
   // in its own document, and the next keystroke would push the stale text
@@ -430,7 +689,7 @@ export default function Editor({
   }, [noteId])
 
   const close = () => {
-    setEditing(null)
+    edit(null)
     view.current?.commands.focus()
   }
 
@@ -470,6 +729,16 @@ export default function Editor({
     openMath(from, latex, false)
   }
 
+  const openFromButton = () => {
+    const current = view.current
+    if (current === null || anchor === null) return
+    // The cursor goes into the anchored block first, so the pointer path
+    // inserts under the block the + is beside rather than under wherever the
+    // cursor happened to be left.
+    current.commands.setTextSelection(anchor.pos)
+    show({ top: anchor.top + BUTTON, left: 0, filter: '', slash: null, picked: 0 })
+  }
+
   const cancel = () => {
     // Escape restores what was there, except that a formula opened empty by
     // `$$ ` has nothing to restore and should not survive being abandoned.
@@ -478,8 +747,53 @@ export default function Editor({
   }
 
   return (
-    <div className="editor" ref={scroll}>
+    <div
+      className="editor"
+      ref={scroll}
+      onMouseMove={(event) => {
+        const current = view.current
+        const box = scroll.current
+        // Not while a menu is open: the anchor would crawl after the pointer
+        // on its way to the menu and move the button out from under it.
+        if (current === null || box === null || blocksNow.current !== null) return
+        const found = current.view.posAtCoords({
+          left: event.clientX,
+          top: event.clientY,
+        })
+        if (found !== null) anchorAt(current, box, found.pos)
+      }}
+    >
       <div ref={host} />
+      {anchor !== null && (
+        <button
+          type="button"
+          className="block-add"
+          aria-label={t('editor.insertBlock')}
+          style={{ top: `${anchor.top}px` } as CSSProperties}
+          // Refusing mousedown keeps the selection in the document, which is
+          // what every command in the menu acts on.
+          onMouseDown={(event) => {
+            event.preventDefault()
+          }}
+          onClick={openFromButton}
+        >
+          +
+        </button>
+      )}
+      {blocks !== null && (
+        <BlockMenu
+          ref={blockEl}
+          items={filterBlocks(blocks.filter, say)}
+          picked={blocks.picked}
+          top={blocks.top}
+          left={blocks.left}
+          focus={blocks.slash === null}
+          onPick={(index) => show({ ...blocks, picked: index })}
+          onRun={runBlock}
+          onMove={moveBlock}
+          onClose={closeBlock}
+        />
+      )}
       {menu !== null && (
         <BubbleMenu
           ref={menuEl}

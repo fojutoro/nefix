@@ -1085,6 +1085,69 @@ input:-webkit-autofill:focus {
   min-width: 24ch;
 }
 
+/* In the gutter the editor's left padding already reserves: --margin is
+   2.75rem, which is the 44px a finger needs, and the text starts a further
+   three gaps to the right of it. The button is therefore beside the block
+   rather than over it, and nothing had to move to make room. */
+.block-add {
+  align-items: center;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  display: flex;
+  font-size: var(--body);
+  justify-content: center;
+  left: var(--gap);
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0;
+  position: absolute;
+}
+
+.block-add:hover {
+  background: var(--lift-hover);
+  border-radius: 4px;
+  color: var(--text);
+}
+
+/* A column, not a row: these are named commands rather than glyphs, and the
+   list is filtered down as it is typed. Scrolls rather than grows, because
+   eleven rows at 44px is taller than a short note's pane. */
+.block-menu {
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 2px 12px var(--lift-hover);
+  max-height: 17rem;
+  min-width: 14rem;
+  overflow-y: auto;
+  padding: 2px;
+  position: absolute;
+  z-index: 1;
+}
+
+/* 44px tall each, for the same reason the bubble menu's buttons are: this is
+   the touch path, and the + button is no use if what it opens is not. */
+.block-menu [role='option'] {
+  background: none;
+  border: 0;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  font-size: var(--small);
+  min-height: 44px;
+  padding: 0 var(--gap);
+  text-align: left;
+  width: 100%;
+}
+
+/* Hover and the keyboard's selection are the same state deliberately: moving
+   the pointer over a row selects it, so Enter and a click cannot disagree
+   about which command is about to run. */
+.block-menu [role='option'][aria-selected='true'] {
+  background: var(--selection);
+}
+
 .rail-toggle {
   display: none;
 }
