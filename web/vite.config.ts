@@ -60,5 +60,10 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     // Rendering a component needs a DOM. The db tests run happily under it.
     environment: 'jsdom',
+    // Without this, vitest stubs every CSS import to an empty string —
+    // including `index.css?raw`, which the editor's typography tests read to
+    // assert what the stylesheet actually declares. Nothing else in the suite
+    // imports CSS, so this processes exactly one file.
+    css: true,
   },
 })
