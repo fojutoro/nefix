@@ -241,6 +241,28 @@ input:-webkit-autofill:focus {
   width: 5px;
 }
 
+/* Furniture: muted, so the class name is what the eye lands on. The row is
+   baseline-aligned and an icon has no baseline worth aligning to, so it is
+   centred out of the line box. Selected, it follows the spine — the class's
+   own colour when it has one, crimson when it does not. */
+.rail-icon {
+  align-self: center;
+  color: var(--text-muted);
+  display: block;
+  flex: none;
+}
+
+.rail-row[aria-current='true'] .rail-icon {
+  color: var(--spine, var(--accent));
+}
+
+/* The shortcut rows are set at --meta, whose line box is under 16px, so a
+   16px icon would be the tallest thing in them and each one would grow. */
+.rail-shortcut .rail-icon {
+  height: 14px;
+  width: 14px;
+}
+
 .rail-name {
   flex: 1;
   overflow: hidden;

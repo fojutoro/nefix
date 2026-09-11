@@ -556,6 +556,39 @@ describe('App class rail', () => {
     expect(row.textContent).toBe('Unfiled1')
   })
 
+  it('marks every kind of rail row with a decorative icon', async () => {
+    const old = await seedClass('Fyzika', [['Sila', beforeMidnight()]])
+    await archiveClass(old.id)
+    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await createNote({ title: 'Nezaradená' })
+    render(<App />)
+
+    const rail = await screen.findByRole('navigation', { name: 'Classes' })
+    await waitFor(() => within(rail).getByRole('button', { name: 'Archived' }))
+    fireEvent.click(within(rail).getByRole('button', { name: 'Archived' }))
+
+    const icon = (name: string | RegExp) =>
+      within(rail).getByRole('button', { name }).querySelector('.rail-icon')
+        ?.innerHTML
+
+    const marks = ['Today', /^Unfiled/, /^Diskrétna/, 'Archived'].map(icon)
+    expect(marks.every((mark) => mark !== undefined && mark !== '')).toBe(true)
+    // Four kinds of row, four different icons. Presence alone would pass with
+    // the same one wired to all of them.
+    expect(new Set(marks).size).toBe(4)
+    // An archived class is still a class, and reads as one.
+    expect(icon(/^Fyzika/)).toBe(icon(/^Diskrétna/))
+
+    // The icons are aria-hidden, so the names the rest of this suite matches
+    // on are the names they were.
+    expect(
+      within(rail).getByRole('button', { name: 'Today' }).textContent,
+    ).toBe('Today')
+    expect(
+      within(rail).getByRole('button', { name: /^Unfiled/ }).textContent,
+    ).toBe('Unfiled1')
+  })
+
   it('creates a class and its general notebook from the inline row, and selects it', async () => {
     render(<App />)
 
