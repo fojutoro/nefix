@@ -844,3 +844,319 @@ describe('links', () => {
     )
   })
 })
+
+// One list, two triggers, and the tests below reach the list through
+// `data-command` rather than through a label, so "both paths run the same
+// command" is asserted against the command's identity instead of against two
+// strings that happen to match.
+describe('block menu', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await i18n.changeLanguage('en')
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  const blockMenu = (container: HTMLElement) => container.querySelector('.block-menu')
+
+  const options = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('.block-menu [role="option"]')).map(
+      (option) => option.getAttribute('data-command'),
+    )
+
+  const optionFor = (container: HTMLElement, id: string) =>
+    container.querySelector(`.block-menu [data-command="${id}"]`) as HTMLElement
+
+  // Through ProseMirror, one character at a time, because the detection reads
+  // the text in front of the cursor and a whole string pasted in at once would
+  // not prove that it holds up mid-word.
+  const typeIn = async (editor: TipTap, text: string) => {
+    for (const char of text) {
+      await act(async () => {
+        type(editor, char)
+      })
+    }
+  }
+
+  const caretAt = async (editor: TipTap, pos: number) => {
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection(pos)
+    })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+  }
+
+  const press = async (element: HTMLElement, key: string) => {
+    await act(async () => {
+      element.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      )
+    })
+  }
+
+  const click = async (element: HTMLElement) => {
+    await act(async () => {
+      element.click()
+    })
+  }
+
+  const tiptapIn = (container: HTMLElement) =>
+    container.querySelector('.tiptap') as HTMLElement
+
+  it('opens on `/` at the start of an empty paragraph', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    expect(blockMenu(container)).toBeNull()
+
+    await typeIn(editor, '/')
+
+    expect(blockMenu(container)).not.toBeNull()
+  })
+
+  // The mutation that matters, and the reason detection reads text rather than
+  // listening for the `/` key. A `key === '/'` handler passes every other test
+  // in this file and fails this one: a URL and a date both carry a slash that
+  // no one wants a menu for.
+  it('stays shut on `/` typed mid-word, and opens on `/` after a space', async () => {
+    const { editor, container } = await open('see http:', false)
+    await caretAt(editor, editor.state.doc.content.size - 1)
+
+    await typeIn(editor, '/')
+    expect(blockMenu(container)).toBeNull()
+    await typeIn(editor, '/x')
+    expect(blockMenu(container)).toBeNull()
+
+    await typeIn(editor, ' /')
+    expect(blockMenu(container)).not.toBeNull()
+  })
+
+  it('narrows the list as the filter is typed', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+
+    await typeIn(editor, '/')
+    expect(options(container).length).toBeGreaterThan(3)
+
+    await typeIn(editor, 'head')
+    expect(options(container)).toEqual(['heading1', 'heading2', 'heading3'])
+  })
+
+  // Typing a sentence that begins with a slash must not trap anyone in a menu.
+  it('closes when the filter matches nothing', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+
+    await typeIn(editor, '/head')
+    expect(blockMenu(container)).not.toBeNull()
+
+    await typeIn(editor, 'zzzz')
+    expect(blockMenu(container)).toBeNull()
+  })
+
+  it('moves the selection with the arrow keys and runs the selected command', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    await typeIn(editor, '/head')
+
+    expect(optionFor(container, 'heading1').getAttribute('aria-selected')).toBe('true')
+
+    await press(tiptapIn(container), 'ArrowDown')
+    expect(optionFor(container, 'heading2').getAttribute('aria-selected')).toBe('true')
+    await press(tiptapIn(container), 'ArrowUp')
+    expect(optionFor(container, 'heading1').getAttribute('aria-selected')).toBe('true')
+
+    await press(tiptapIn(container), 'ArrowDown')
+    await press(tiptapIn(container), 'ArrowDown')
+    await press(tiptapIn(container), 'Enter')
+
+    expect(blockMenu(container)).toBeNull()
+    expect(editor.state.doc.firstChild?.type.name).toBe('heading')
+    // The third row, so running the first one — or any fixed index — fails.
+    expect(editor.state.doc.firstChild?.attrs.level).toBe(3)
+  })
+
+  // Escape leaves the slash where it was typed: it is literal text that
+  // happened to open a menu, and closing the menu does not make it not text.
+  it('closes on Escape, leaves the `/` in the document, and holds the key', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    await typeIn(editor, '/quo')
+
+    const seen = vi.fn()
+    window.addEventListener('keydown', seen)
+    await press(tiptapIn(container), 'Escape')
+    window.removeEventListener('keydown', seen)
+
+    expect(blockMenu(container)).toBeNull()
+    expect(editor.state.doc.textContent).toBe('/quo')
+    // App.tsx listens on the window and never asks whether anyone dealt with
+    // the key, so an Escape that reaches it closes the note behind the menu.
+    expect(seen).not.toHaveBeenCalled()
+
+    // The half that makes Escape mean anything. The text still matches, so a
+    // detection that only looks at the text reopens the menu on the very next
+    // keystroke and there is no way out of it at all.
+    await typeIn(editor, 't')
+    expect(blockMenu(container)).toBeNull()
+    expect(editor.state.doc.textContent).toBe('/quot')
+
+    // Dismissed, not disabled: a fresh `/` somewhere else still opens.
+    await typeIn(editor, ' /')
+    expect(blockMenu(container)).not.toBeNull()
+  })
+
+  it('reopens on a fresh `/` typed where a dismissed one was', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    await typeIn(editor, '/quo')
+    await press(tiptapIn(container), 'Escape')
+    expect(blockMenu(container)).toBeNull()
+
+    // Backed out and tried again at the same offset. A dismissal remembered by
+    // position and never cleared leaves that spot dead for the rest of the
+    // session, which is worse than not having Escape at all.
+    await act(async () => {
+      editor.commands.setTextSelection({ from: 1, to: 5 })
+      editor.commands.deleteSelection()
+    })
+    await typeIn(editor, '/')
+
+    expect(blockMenu(container)).not.toBeNull()
+  })
+
+  it('removes the typed `/text` and inserts the block', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    await typeIn(editor, '/quote')
+
+    await press(tiptapIn(container), 'Enter')
+
+    expect(editor.state.doc.firstChild?.type.name).toBe('blockquote')
+    expect(editor.state.doc.textContent).toBe('')
+  })
+
+  it('inserts below the current block from the + button, not at the cursor', async () => {
+    const { editor, container } = await open('alpha', false)
+    await caretAt(editor, 3)
+
+    await click(container.querySelector('.block-add') as HTMLElement)
+    await click(optionFor(container, 'heading1'))
+
+    // Untouched, and in one piece: inserting at the cursor would have split it.
+    expect(editor.state.doc.firstChild?.type.name).toBe('paragraph')
+    expect(editor.state.doc.firstChild?.textContent).toBe('alpha')
+    // Second, so it went below. Third is StarterKit's trailing paragraph,
+    // which it adds after any document ending in a heading.
+    expect(editor.state.doc.child(1).type.name).toBe('heading')
+  })
+
+  it('produces the same block from both triggers for the same command', async () => {
+    const slash = await open('', false)
+    await caretAt(slash.editor, 1)
+    await typeIn(slash.editor, '/code')
+    await press(tiptapIn(slash.container), 'Enter')
+    const typed = slash.editor.state.selection.$from.parent.type.name
+    cleanup()
+
+    const button = await open('', false)
+    await caretAt(button.editor, 1)
+    await click(button.container.querySelector('.block-add') as HTMLElement)
+    await click(optionFor(button.container, 'codeBlock'))
+    const clicked = button.editor.state.selection.$from.parent.type.name
+
+    expect(typed).toBe('codeBlock')
+    expect(clicked).toBe(typed)
+  })
+
+  // A block you have to click into is a block that failed.
+  it('leaves the cursor inside a code block', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    await typeIn(editor, '/code')
+    await press(tiptapIn(container), 'Enter')
+
+    expect(editor.state.selection.$from.parent.type.name).toBe('codeBlock')
+  })
+
+  it('leaves the cursor inside a table', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    await typeIn(editor, '/table')
+    await press(tiptapIn(container), 'Enter')
+
+    let inTable = false
+    for (let depth = editor.state.selection.$from.depth; depth > 0; depth -= 1) {
+      if (editor.state.selection.$from.node(depth).type.name === 'table') inTable = true
+    }
+    expect(inTable).toBe(true)
+  })
+
+  it('does not open while the formula source field is open', async () => {
+    const { editor, container } = await open('pick me $x^2$ here', false)
+    await act(async () => {
+      container
+        .querySelector('[data-type="inline-math"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(container.querySelector('.math-source')).not.toBeNull()
+
+    await act(async () => {
+      editor.commands.setTextSelection(1)
+    })
+    await typeIn(editor, '/')
+
+    // Start of a paragraph, so without the guard this is exactly the case that
+    // opens the menu on top of the field holding the cursor.
+    expect(blockMenu(container)).toBeNull()
+  })
+
+  // The cursor is deliberately parked behind text that already matches, so the
+  // emptiness check is the only thing holding the menu shut. Relying on the
+  // collapse that typing causes tests nothing: it makes the selection empty
+  // before the guard is ever consulted.
+  it('stays shut while a selection is open, even behind a matching `/`', async () => {
+    const { editor, container } = await open('/quo bold me please', false)
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection({ from: 5, to: 9 })
+    })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+
+    expect(container.querySelector('.bubble-menu')).not.toBeNull()
+    expect(blockMenu(container)).toBeNull()
+  })
+
+  it('takes over from the bubble menu when typing collapses the selection', async () => {
+    const { editor, container } = await open('bold me please', false)
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection({ from: 1, to: 5 })
+    })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+    expect(container.querySelector('.bubble-menu')).not.toBeNull()
+
+    await typeIn(editor, '/')
+
+    expect(container.querySelector('.bubble-menu')).toBeNull()
+    expect(blockMenu(container)).not.toBeNull()
+  })
+
+  // A <button> in the margin is not contenteditable and is not an input, so
+  // App.tsx's guard does not cover it and `n` would create a note.
+  it('keeps keys off the window while the + menu is open', async () => {
+    const { editor, container } = await open('alpha', false)
+    await caretAt(editor, 3)
+    await click(container.querySelector('.block-add') as HTMLElement)
+
+    const seen = vi.fn()
+    window.addEventListener('keydown', seen)
+    await press(blockMenu(container) as HTMLElement, 'n')
+    await press(blockMenu(container) as HTMLElement, 'Escape')
+    window.removeEventListener('keydown', seen)
+
+    expect(seen).not.toHaveBeenCalled()
+    expect(blockMenu(container)).toBeNull()
+  })
+})
