@@ -86,6 +86,7 @@ export const en = {
   'auth.signInAgain': 'Sign in again',
   'notes.listLabel': 'Notes',
   'notes.editorLabel': 'Note body, Markdown',
+  'notes.mathLabel': 'Formula, LaTeX',
   'notes.create': 'New note',
   'notes.untitled': 'Untitled',
   'notes.delete': 'Delete {{title}}',

@@ -422,7 +422,7 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
       if (event.key !== 'n' || event.metaKey || event.ctrlKey || event.altKey) {
         return
       }
-      // CodeMirror's document is contenteditable, so isContentEditable is
+      // TipTap's document is contenteditable, so isContentEditable is
       // what catches the editor; an input is not contentEditable, which is
       // why the tag names are asked for as well. Getting this wrong means
       // typing the letter n in a note creates a note.
@@ -521,6 +521,7 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
           noteId={selected.id}
           initialBody={selected.bodyMd}
           label={t('notes.editorLabel')}
+          mathLabel={t('notes.mathLabel')}
           focus={focusEditor}
           onChange={onChange}
         />

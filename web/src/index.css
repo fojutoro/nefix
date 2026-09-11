@@ -713,7 +713,7 @@ input:-webkit-autofill:focus {
 }
 
 /* Ruled here too, on the container and behind the text rather than under each
-   line: a KaTeX widget is taller than a line of type, so the lines and the
+   line: a KaTeX formula is taller than a line of type, so the lines and the
    ruling cannot stay in register. They do not need to — a ruled page with
    text on it is the look, and `local` is what makes the ruling travel with
    the text instead of sitting still while it scrolls. */
@@ -729,15 +729,14 @@ input:-webkit-autofill:focus {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-}
-
-.editor .cm-editor {
-  height: 100%;
+  /* The formula field is placed against this box, so it scrolls with the
+     formula it belongs to rather than hanging in the viewport. */
+  position: relative;
 }
 
 /* Monospace, because this holds markdown and LaTeX, at the body size, because
    a sixth size for one surface is how five sizes becomes eleven. */
-.editor .cm-content {
+.editor .tiptap {
   font-family: ui-monospace, monospace;
   font-size: var(--body);
   /* The ruling's pitch, so the two at least share a rhythm. */
@@ -747,14 +746,80 @@ input:-webkit-autofill:focus {
      against the margin rule rather than centred: the rule is the content
      pane's own, continuing, and centring would strand it far to the left. */
   max-width: 68ch;
+  min-height: 100%;
   padding: var(--gap) calc(var(--gap) * 3) calc(var(--gap) * 8)
     calc(var(--margin) + var(--gap) * 3);
 }
 
-/* CodeMirror draws its own focus ring, and the outer one would sit around the
-   whole scroll area rather than the text. */
-.editor .cm-editor.cm-focused {
+/* TipTap draws no focus ring of its own, and the outer one would sit around
+   the whole scroll area rather than the text. */
+.editor .tiptap:focus {
   outline: none;
+}
+
+/* Rendered headings and prose leave the monospace stack: the syntax is gone
+   from the document, so there is no raw markdown left for it to line up. */
+.editor .tiptap :is(h1, h2, h3, h4, h5, h6) {
+  font-family: inherit;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: calc(var(--gap) * 3) 0 var(--gap);
+}
+
+.editor .tiptap :is(h1, h2) {
+  font-size: var(--title);
+}
+
+.editor .tiptap :is(h3, h4, h5, h6) {
+  font-size: var(--body);
+}
+
+.editor .tiptap :is(p, ul, ol, blockquote, pre, table) {
+  margin: 0 0 var(--gap);
+}
+
+.editor .tiptap blockquote {
+  border-left: 2px solid var(--ruling);
+  color: var(--text-muted);
+  padding-left: calc(var(--gap) * 2);
+}
+
+.editor .tiptap :is(td, th) {
+  border: 1px solid var(--ruling);
+  padding: 0 var(--gap);
+}
+
+/* The whole formula highlights as one thing, because that is what it is: an
+   atom the cursor cannot enter. Clicking it opens the field below. */
+.editor .tiptap .tiptap-mathematics-render--editable {
+  cursor: pointer;
+}
+
+.editor .tiptap .ProseMirror-selectednode {
+  background: var(--selection);
+}
+
+/* A formula KaTeX could not parse shows its own source rather than an error
+   box: a half-typed \frac{ is the normal state while writing, and the source
+   is what you need in front of you to finish it. */
+.editor .tiptap :is(.inline-math-error, .block-math-error) {
+  color: var(--danger);
+  text-decoration: underline dotted;
+}
+
+/* The formula source, over the note rather than beside it, because a field
+   somewhere else is a field you have to go and find. */
+.math-source {
+  background: var(--raised);
+  border: 1px solid var(--ruling);
+  border-radius: 2px;
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: var(--small);
+  min-width: 12ch;
+  padding: 2px var(--gap);
+  position: absolute;
+  z-index: 1;
 }
 
 .rail-toggle {

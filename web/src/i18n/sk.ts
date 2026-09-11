@@ -88,6 +88,7 @@ export const sk = {
   'auth.signInAgain': 'Prihlásiť sa znova',
   'notes.listLabel': 'Poznámky',
   'notes.editorLabel': 'Text poznámky, Markdown',
+  'notes.mathLabel': 'Vzorec, LaTeX',
   'notes.create': 'Nová poznámka',
   'notes.untitled': 'Bez názvu',
   'notes.delete': 'Odstrániť {{title}}',
