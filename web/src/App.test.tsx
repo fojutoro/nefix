@@ -66,9 +66,9 @@ function visibility(state: 'visible' | 'hidden') {
 // triggers started without advancing the clock the debounce reads.
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
 
-// CodeMirror measures itself once it mounts, and jsdom has no
-// ResizeObserver. Nothing here tests CodeMirror; this only keeps the editor
-// from throwing when the new note selects itself.
+// jsdom has no ResizeObserver, and an editor that measures itself on mount
+// throws without one. Nothing here tests the editor; this only keeps it from
+// throwing when the new note selects itself.
 class NoopResizeObserver {
   observe() {}
   unobserve() {}
@@ -445,7 +445,8 @@ const noteRows = () =>
     .getAllByRole('listitem')
     .slice(0, -1)
 
-const editor = () => document.querySelector('.cm-content')
+// TipTap's editable node, which is what `.editor` now holds.
+const editor = () => document.querySelector('.tiptap')
 
 const railRows = () =>
   within(screen.getByRole('navigation', { name: 'Classes' }))
@@ -612,7 +613,11 @@ describe('App class rail', () => {
     )
     // The new note is open, with the cursor in it.
     await waitFor(() => expect(editor()).not.toBeNull())
-    expect(document.activeElement?.closest('.editor')).not.toBeNull()
+    // The editor defers taking focus to an animation frame, so the cursor
+    // arrives a tick after the editor does.
+    await waitFor(() =>
+      expect(document.activeElement?.closest('.editor')).not.toBeNull(),
+    )
   })
 
   it('does not create a note when n is typed inside the editor', async () => {
