@@ -1,3 +1,4 @@
+import { liveQuery, type Observable } from 'dexie'
 import { db, type Deadline, type Topic } from './schema.ts'
 import { uuidv7 } from './uuid.ts'
 
@@ -162,4 +163,14 @@ export async function listOverdue(): Promise<Deadline[]> {
       (row) => row.deletedAt === null && row.doneAt === null && dayOf(row) < day,
     )
     .toArray()
+}
+
+// liveQuery for the reason observeNote uses one: a deadline added in the
+// modal, ticked off in the list or delivered by a pull has to reach whatever is
+// showing it — the class page, and the highlight in an open note — and nothing
+// on those write paths knows who is watching.
+export function observeDeadlines(
+  classId?: string | null,
+): Observable<Deadline[]> {
+  return liveQuery(() => listDeadlines(classId))
 }

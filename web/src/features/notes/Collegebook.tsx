@@ -30,6 +30,7 @@ type PageProps = {
   settings: Settings
   onSettings: (patch: Partial<Settings>) => void
   onResetSettings: () => void
+  jump: string | null
 }
 
 function Page({
@@ -44,6 +45,7 @@ function Page({
   settings,
   onSettings,
   onResetSettings,
+  jump,
 }: PageProps) {
   // One autosave per page, so one pending write per page. Sharing a hook
   // across the stack would let the debounce started on page 2 land on
@@ -72,6 +74,7 @@ function Page({
           mathLabel={mathLabel}
           focus={false}
           onChange={onChange}
+          jump={jump}
         />
       ) : (
         // The text rather than an empty box: a reader scrolling through a
@@ -113,6 +116,9 @@ type Props = {
   settings: Settings
   onSettings: (patch: Partial<Settings>) => void
   onResetSettings: () => void
+  // A page opened from a deadline's topic, with the heading to land on, or
+  // null for the heading when it is no longer there.
+  jump?: { noteId: string; heading: string | null } | null
 }
 
 export default function Collegebook({
@@ -125,6 +131,7 @@ export default function Collegebook({
   settings,
   onSettings,
   onResetSettings,
+  jump = null,
 }: Props) {
   const { t } = useTranslation()
   const box = useRef<HTMLDivElement>(null)
@@ -177,6 +184,19 @@ export default function Collegebook({
     return () => observer.disconnect()
   }, [pages])
 
+  // Only for a heading that is gone. A heading that is there is scrolled to by
+  // the page's own editor, and scrolling to the top of the page afterwards
+  // would undo it. Once per jump, or every autosave refreshing the pages would
+  // drag the reader back.
+  const landed = useRef<Props['jump']>(null)
+  useEffect(() => {
+    if (jump === null || jump.heading !== null || landed.current === jump) return
+    const page = box.current?.querySelector(`[data-page="${jump.noteId}"]`)
+    if (!page) return
+    landed.current = jump
+    page.scrollIntoView({ block: 'start' })
+  }, [jump, pages])
+
   // The settings reach the page as custom properties and data attributes on
   // one element, so a control moving is a style recalculation and not a
   // remount of every editor in the book. They are scoped here rather than at
@@ -211,7 +231,8 @@ export default function Collegebook({
             number={index + 1}
             total={pages.length}
             mounted={
-              near === null ? index < FIRST : near.includes(page.id)
+              page.id === jump?.noteId ||
+              (near === null ? index < FIRST : near.includes(page.id))
             }
             label={label}
             mathLabel={mathLabel}
@@ -220,6 +241,7 @@ export default function Collegebook({
             settings={settings}
             onSettings={onSettings}
             onResetSettings={onResetSettings}
+            jump={page.id === jump?.noteId ? jump.heading : null}
           />
         ))}
       </ul>

@@ -22,6 +22,7 @@ import {
   writeLastWrittenClassId,
   type ClassWithRecency,
 } from './db/classes.ts'
+import { observeDeadlines } from './db/deadlines.ts'
 import {
   createCollegebook,
   listCollegebooks,
@@ -42,13 +43,14 @@ import {
   createNote,
   createPage,
   deleteNote,
+  getNote,
   listPages,
   observeDirtyCount,
   readLastNoteId,
   updateNote,
   writeLastNoteId,
 } from './db/notes.ts'
-import type { Class, Note, Notebook } from './db/schema.ts'
+import type { Class, Deadline, Note, Notebook, Topic } from './db/schema.ts'
 import AuthScreen from './features/auth/AuthScreen.tsx'
 import ClassPage, { type BookCard } from './features/classes/ClassPage.tsx'
 import ClassRail from './features/classes/ClassRail.tsx'
@@ -64,6 +66,7 @@ import { readSettings, type BookSettings } from './db/settings.ts'
 import Collegebook from './features/notes/Collegebook.tsx'
 import SyncDot from './features/sync/SyncDot.tsx'
 import Editor from './features/notes/Editor.tsx'
+import { outline } from './features/notes/outline.ts'
 import { searchNotes } from './features/notes/search.ts'
 import { useAutosave } from './features/notes/useAutosave.ts'
 import { logout, me, type User } from './sync/auth.ts'
@@ -131,6 +134,22 @@ function Workspace({
     null,
   )
   const [query, setQuery] = useState('')
+  // Carries its class for the reason the books do.
+  const [deadlines, setDeadlines] = useState<{
+    classId: string
+    rows: Deadline[]
+  } | null>(null)
+  // Where a topic chip took the reader, kept while that note is open. Whether
+  // the heading is missing is decided from the body before navigating, so the
+  // editor is never sent looking for a heading that is not there.
+  const [jump, setJump] = useState<{
+    noteId: string
+    heading: string
+    missing: boolean
+  } | null>(null)
+  // The heading of a topic whose note was deleted, said on the page instead
+  // of navigating anywhere.
+  const [gone, setGone] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [railOpen, setRailOpen] = useState(false)
   const [railWidth, setRailWidth] = useState(RAIL_DEFAULT)
@@ -163,6 +182,18 @@ function Workspace({
     classes === null ||
     [...classes, ...archived].some((row) => row.id === chosen.classId)
   const selection = reachable ? chosen : TODAY
+
+  // Live, because the tick in the list and the modal both write to the store
+  // and neither knows that this page is showing the result.
+  useEffect(() => {
+    if (selection.kind !== 'class') return
+    const classId = selection.classId
+    const watch = observeDeadlines(classId).subscribe({
+      next: (rows) => setDeadlines({ classId, rows }),
+      error: () => setDeadlines({ classId, rows: [] }),
+    })
+    return () => watch.unsubscribe()
+  }, [selection])
 
   // Nothing is remembered until the stored ids have been read back, so the
   // mount-time write of `null` cannot erase them before the read returns.
@@ -551,6 +582,37 @@ function Workspace({
     await Promise.all([refresh(), refreshRail()])
   }
 
+  const openTopic = async (topic: Topic) => {
+    if (topic.noteId === null) return
+    const note = await getNote(topic.noteId)
+    if (note === undefined) {
+      setGone(topic.heading)
+      return
+    }
+    setGone(null)
+    setJump({
+      noteId: note.id,
+      heading: topic.heading,
+      missing: !outline(note.bodyMd).includes(topic.heading),
+    })
+    setFocusEditor(false)
+    // A page is read in its book, which is where its heading is.
+    if (note.pageOrder !== null) {
+      setOpenBookId(note.notebookId)
+      return
+    }
+    // The editor opens from the list, so the note has to be in it: no search
+    // hiding it, and the shelf it is actually on.
+    setQuery('')
+    if (!scope(note)) {
+      const classId = classOf(note.notebookId)
+      setChosen(
+        classId === null ? { kind: 'unfiled' } : { kind: 'class', classId },
+      )
+    }
+    setSelectedId(note.id)
+  }
+
   // Held in a ref so the shortcut is registered once. Reading `create`
   // directly would add and remove a window listener on every keystroke in the
   // search box.
@@ -558,6 +620,7 @@ function Workspace({
     setFocusEditor(false)
     setSelectedId(null)
     setOpenBookId(null)
+    setJump(null)
   }
 
   const inContent = selected !== null || openBookId !== null
@@ -645,6 +708,12 @@ function Workspace({
     </button>
   )
 
+  const lost = jump?.missing ? (
+    <p className="topic-lost" role="status">
+      {t('deadlines.topicMissing', { heading: jump.heading })}
+    </p>
+  ) : null
+
   let content = null
   if (openBookId !== null) {
     // The editor's shape: full width, a back arrow, the class it belongs to.
@@ -660,6 +729,7 @@ function Workspace({
             <span aria-hidden="true">&larr;</span>
             <span className="meta">{heading}</span>
           </button>
+          {lost}
         </header>
         <Collegebook
           pages={pages?.bookId === openBookId ? pages.rows : []}
@@ -671,6 +741,11 @@ function Workspace({
           settings={bookSettings}
           onSettings={(patch) => void changeSettings(patch)}
           onResetSettings={() => void clearSettings()}
+          jump={
+            jump === null
+              ? null
+              : { noteId: jump.noteId, heading: jump.missing ? null : jump.heading }
+          }
         />
       </div>
     )
@@ -687,6 +762,7 @@ function Workspace({
             <span aria-hidden="true">&larr;</span>
             <span className="meta">{heading}</span>
           </button>
+          {lost}
         </header>
         <Editor
           noteId={selected.id}
@@ -695,6 +771,9 @@ function Workspace({
           mathLabel={t('notes.mathLabel')}
           focus={focusEditor}
           onChange={onChange}
+          jump={
+            jump?.noteId === selected.id && !jump.missing ? jump.heading : null
+          }
         />
       </div>
     )
@@ -702,6 +781,7 @@ function Workspace({
     content = (
       <ClassPage
         kind={selection.kind}
+        classId={selection.kind === 'class' ? selection.classId : null}
         heading={heading}
         code={shelf?.code ?? null}
         colour={shelf?.colour ?? null}
@@ -713,18 +793,30 @@ function Workspace({
             ? books.cards
             : []
         }
+        deadlines={
+          selection.kind === 'class' && deadlines?.classId === selection.classId
+            ? deadlines.rows
+            : []
+        }
         query={query}
         toggle={toggle}
         notice={
-          classes.length === 0 && (
-            // One sentence and the same affordance as the rail, not a tour.
-            <p className="notice">
-              {t('classes.empty')}
-              <button type="button" onClick={startFirstClass}>
-                {t('classes.addFirst')}
-              </button>
-            </p>
-          )
+          <>
+            {classes.length === 0 && (
+              // One sentence and the same affordance as the rail, not a tour.
+              <p className="notice">
+                {t('classes.empty')}
+                <button type="button" onClick={startFirstClass}>
+                  {t('classes.addFirst')}
+                </button>
+              </p>
+            )}
+            {gone !== null && (
+              <p className="notice" role="status">
+                {t('deadlines.noteGone', { heading: gone })}
+              </p>
+            )}
+          </>
         }
         onQueryChange={setQuery}
         onSelect={(id) => {
@@ -735,6 +827,7 @@ function Workspace({
         onOpenBook={setOpenBookId}
         onCreateBook={(name) => void addBook(name)}
         onDelete={(id) => void remove(id)}
+        onOpenTopic={(topic) => void openTopic(topic)}
         // An empty name does nothing: a class has to be called something.
         onRename={(name) => name !== '' && void editClass({ name })}
         onCode={(code) => void editClass({ code: code === '' ? null : code })}
@@ -771,6 +864,7 @@ function Workspace({
             // The search belongs to the shelf it was typed on, and the box
             // is rebuilt with the page.
             setQuery('')
+            setGone(null)
             setChosen(next)
           }}
           onCreatingChange={setCreating}

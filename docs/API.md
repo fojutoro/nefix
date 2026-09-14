@@ -377,11 +377,13 @@ ordinary field on an ordinary update, as `archived_at` is on a class.
 
 `topics` is what to revise for this deadline — links into the author's
 own notes, so opening a deadline shows the material and clicking a topic
-opens the note at that heading. Each topic is **a note id and the heading
-text together**, never one or the other: the text alone dangles when a
-heading is renamed, and the id alone cannot say which part of a long note
-is meant. Together they degrade gracefully — the note still opens, and
-the heading is either found or reported missing.
+opens the note at that heading. Each topic is **the heading text, with
+the note id beside it** wherever the topic was picked from a note: the
+text alone dangles when a heading is renamed, and the id alone cannot say
+which part of a long note is meant. Together they degrade gracefully — the
+note still opens, and the heading is either found or reported missing. A
+`noteId` of null is a topic not yet written up in any note, and links
+nowhere.
 
 Like `settings` on a notebook it is **a JSON string, not a nested array**,
 and the server stores and returns those bytes unchanged. It does not parse

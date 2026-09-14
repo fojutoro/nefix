@@ -87,13 +87,17 @@ export type Notebook = {
 }
 
 // A link from a deadline into the reader's own notes: what to revise, and
-// where to find it. A note id and the heading text together, never one or the
-// other — the text alone dangles the moment a heading is renamed, and the id
-// alone cannot say which part of a long note is meant. Together they degrade
-// gracefully: the note still opens, and the heading is either found or
-// reported missing.
+// where to find it. The heading text always, and the note id with it wherever
+// the topic was picked from a note — the text alone dangles the moment a
+// heading is renamed, and the id alone cannot say which part of a long note is
+// meant. Together they degrade gracefully: the note still opens, and the
+// heading is either found or reported missing.
+//
+// A null noteId is a topic nobody has written up yet. A student revises what is
+// on the syllabus, not only what is already in their notes, so it is kept as
+// text that links nowhere rather than refused.
 export type Topic = {
-  noteId: string
+  noteId: string | null
   heading: string
 }
 
