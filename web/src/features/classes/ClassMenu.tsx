@@ -20,6 +20,9 @@ type Props = {
   onSemester: (semester: string) => void
   onArchive: () => void
   onDelete: () => void
+  // Here as well as in the deadlines section, because that section is absent
+  // until a class has a deadline, and the first one has to start somewhere.
+  onNewDeadline: () => void
 }
 
 export default function ClassMenu({
@@ -29,6 +32,7 @@ export default function ClassMenu({
   onSemester,
   onArchive,
   onDelete,
+  onNewDeadline,
 }: Props) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -92,6 +96,16 @@ export default function ClassMenu({
             className="menu-item"
             onCommit={onSemester}
           />
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
+              setOpen(false)
+              onNewDeadline()
+            }}
+          >
+            {t('deadlines.new')}
+          </button>
           {/* Archive first and delete last: the gentle answer is the one that
               should be easiest to reach for. */}
           <button

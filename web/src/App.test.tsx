@@ -1709,3 +1709,97 @@ describe('App collegebooks', () => {
     ask.mockRestore()
   })
 })
+
+describe('App deadline topics', () => {
+  const inThreeDays = () =>
+    `${new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`
+
+  // jsdom has no scrollIntoView. The element it is called on is the answer to
+  // "where did the jump land".
+  const scroll = vi.fn()
+
+  async function seed(heading: string) {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+    const notebook = (await listNotebooks(created.id))[0]!
+    const note = await createNote({
+      title: 'Množiny a relácie',
+      bodyMd: '# Množiny a relácie\n\n## Operácie\n\nText.\n\n## Karteziánsky súčin\n\nViac.',
+      notebookId: notebook.id,
+    })
+    await createDeadline({
+      title: 'Test — Množiny a relácie',
+      dueAt: inThreeDays(),
+      classId: created.id,
+      topics: [{ noteId: note.id, heading }],
+    })
+    await writeLastClassId(created.id)
+    return note
+  }
+
+  const chip = async (name: string) =>
+    within(await screen.findByRole('region', { name: 'Next deadline' })).getByRole(
+      'button',
+      { name },
+    )
+
+  beforeEach(async () => {
+    await db.notes.clear()
+    await db.classes.clear()
+    await db.notebooks.clear()
+    await db.deadlines.clear()
+    await db.meta.clear()
+    await i18n.changeLanguage('en')
+    vi.mocked(me).mockResolvedValue(account)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    )
+    scroll.mockClear()
+    Element.prototype.scrollIntoView = scroll
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  it('opens the note from a chip and lands on the heading', async () => {
+    await seed('Karteziánsky súčin')
+    render(<App />)
+
+    fireEvent.click(await chip('Karteziánsky súčin'))
+
+    await waitFor(() => expect(editor()).not.toBeNull())
+    await waitFor(() => {
+      const landed = scroll.mock.contexts.at(-1) as Element | undefined
+      expect(landed?.tagName).toBe('H2')
+      expect(landed?.textContent).toBe('Karteziánsky súčin')
+    })
+    expect(document.querySelector('.topic-flash')?.textContent).toBe(
+      'Karteziánsky súčin',
+    )
+    expect(screen.queryByText(/is no longer in this note/)).toBeNull()
+  })
+
+  it('opens the note anyway and says so when the heading is gone', async () => {
+    await seed('Relácie')
+    render(<App />)
+
+    fireEvent.click(await chip('Relácie'))
+
+    await screen.findByText('“Relácie” is no longer in this note.')
+    expect(editor()).not.toBeNull()
+    expect(scroll).not.toHaveBeenCalled()
+  })
+
+  it('stays on the class page and says so when the note is gone', async () => {
+    const note = await seed('Operácie')
+    await deleteNote(note.id)
+    render(<App />)
+
+    fireEvent.click(await chip('Operácie'))
+
+    await screen.findByText('The note with “Operácie” has been deleted.')
+    expect(editor()).toBeNull()
+  })
+})

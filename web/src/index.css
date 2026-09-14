@@ -21,6 +21,10 @@
   --accent: #9b1c2e;
   --danger: #c2410c;
   --selection: #f2c879;
+  /* A heading a deadline names. Paler than --selection so a selection inside
+     one still shows, and so the flash on landing has somewhere brighter to
+     go. */
+  --marked: #f8e8c8;
   /* The menu panel's shadow. --lift-page is a sheet of paper's, much softer:
      a menu hovers over the page, a page rests on the desk. */
   --lift-hover: rgba(26, 25, 23, 0.13);
@@ -2133,4 +2137,222 @@ input:-webkit-autofill:focus {
   padding: var(--gap) var(--sheet-edge) var(--gap) var(--sheet-margin);
   text-align: left;
   width: 100%;
+}
+
+/* The one card on the class page that is not a book, and the one place on it
+   that --danger is spent: a miss is the only thing here worth alarm. */
+.next-deadline {
+  background: var(--card);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: calc(var(--gap) / 2);
+  margin: 0 0 calc(var(--gap) * 4);
+  max-width: 38em;
+  padding: calc(var(--gap) * 2);
+}
+
+.next-deadline p {
+  margin: 0;
+}
+
+.next-title {
+  font-size: var(--title);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.next-deadline[data-late='true'] {
+  border-color: var(--danger);
+}
+
+.next-deadline[data-late='true'] .meta {
+  color: var(--danger);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--gap) / 2);
+  list-style: none;
+  margin: calc(var(--gap) / 2) 0 0;
+  padding: 0;
+}
+
+.chip {
+  align-items: center;
+  border: 1px solid var(--border-input);
+  border-radius: 2px;
+  display: inline-flex;
+  font-size: var(--small);
+  gap: calc(var(--gap) / 2);
+  padding: 0 var(--gap);
+}
+
+.chip button {
+  border: 0;
+  line-height: 1;
+  padding: 0;
+}
+
+/* Not written up yet, so there is nowhere to go: dashed, like a line still to
+   be filled in, and not pressable. */
+.chip-loose {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+.deadlines {
+  margin: 0 0 calc(var(--gap) * 4);
+}
+
+.deadlines-head {
+  align-items: baseline;
+  display: flex;
+  gap: calc(var(--gap) * 2);
+  margin: 0 0 var(--gap);
+}
+
+.deadlines-head h2 {
+  margin: 0;
+}
+
+.deadlines-toggle {
+  border: 0;
+  color: var(--text-muted);
+  font-size: var(--small);
+  margin-left: auto;
+  padding: 0;
+}
+
+.deadline-rows {
+  border-top: 1px solid var(--border);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.deadline-row {
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  column-gap: calc(var(--gap) * 2);
+  display: grid;
+  grid-template-columns: auto 7rem minmax(0, 1fr);
+  padding: var(--gap) 0;
+}
+
+.deadline-row input[type='checkbox'] {
+  accent-color: var(--accent);
+  margin: 0;
+  padding: 0;
+}
+
+.deadline-row[data-done='true'] .deadline-title {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.deadline-new {
+  display: block;
+}
+
+.deadline-new button {
+  border: 0;
+  color: var(--accent);
+  padding: 0;
+}
+
+.modal-backdrop {
+  background: var(--lift-hover);
+  display: grid;
+  inset: 0;
+  padding-top: 12vh;
+  place-items: start center;
+  position: fixed;
+  z-index: 10;
+}
+
+.deadline-modal {
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 12px var(--lift-hover);
+  display: grid;
+  gap: calc(var(--gap) * 2);
+  max-width: calc(100vw - var(--gap) * 4);
+  padding: calc(var(--gap) * 3);
+  width: 28rem;
+}
+
+.deadline-modal p {
+  margin: 0;
+}
+
+.deadline-modal .field {
+  border: 0;
+  display: grid;
+  gap: calc(var(--gap) / 2);
+  margin: 0;
+  padding: 0;
+}
+
+.deadline-modal :is(select, textarea) {
+  background: var(--bg);
+  border: 1px solid var(--border-input);
+  color: inherit;
+  font: inherit;
+  padding: var(--gap);
+}
+
+.deadline-modal textarea {
+  resize: vertical;
+}
+
+.topic-options {
+  border: 1px solid var(--border);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.topic-options [role='option'] {
+  cursor: pointer;
+  display: flex;
+  gap: calc(var(--gap) * 2);
+  justify-content: space-between;
+  padding: calc(var(--gap) / 2) var(--gap);
+}
+
+.topic-options [aria-selected='true'] {
+  background: var(--selection);
+}
+
+.modal-actions {
+  display: flex;
+  gap: var(--gap);
+  justify-content: flex-end;
+}
+
+.modal-actions button[type='submit'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--card);
+}
+
+/* Behind the words only, and clone so a heading that wraps is marked on every
+   line rather than once across the break. The fade is out of the flash and
+   never into it: landing should be instant, settling should not be. */
+.editor .tiptap .topic-marked {
+  background: var(--marked);
+  box-decoration-break: clone;
+  transition: background-color 600ms ease-out;
+}
+
+.editor .tiptap .topic-flash {
+  background: var(--selection);
+  transition: none;
+}
+
+.topic-lost {
+  color: var(--text-muted);
+  font-size: var(--small);
+  margin: 0;
 }

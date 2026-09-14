@@ -13,11 +13,19 @@ import { TaskList } from '@tiptap/extension-list/task-list'
 import { TaskItem } from '@tiptap/extension-list/task-item'
 import Image from '@tiptap/extension-image'
 import { useTranslation } from 'react-i18next'
+import { observeDeadlines } from '../../db/deadlines.ts'
 import { observeNote } from '../../db/notes.ts'
 import BubbleMenu from './BubbleMenu.tsx'
 import BlockMenu from './BlockMenu.tsx'
 import { KEEP, filterBlocks, type Labelled, type Translate } from './blocks.ts'
 import { findMath } from './math.ts'
+import {
+  TopicHighlight,
+  headingAt,
+  markTopics,
+  namedIn,
+  sameNames,
+} from './topics.ts'
 
 // `@tiptap/extension-mathematics` tokenises inline maths with
 // /^\$([^$]+)\$(?!\$)/, which has no delimiter rule at all: "It costs $5 and
@@ -163,6 +171,7 @@ export function editorExtensions(openMath?: OpenMath) {
       onClick: (node, pos) => openMath?.(pos, node.attrs.latex, true),
       onOpen: (pos: number) => openMath?.(pos, '', true),
     }),
+    TopicHighlight,
   ]
 }
 
@@ -219,6 +228,10 @@ type Blocks = {
   picked: number
 }
 
+// Long enough to find on a screen that just scrolled, short enough to be gone
+// before reading starts.
+const FLASH_MS = 2000
+
 type Props = {
   noteId: string
   initialBody: string
@@ -229,6 +242,10 @@ type Props = {
   // clicked, which is not the same thing at all.
   focus: boolean
   onChange: (bodyMd: string) => void
+  // The heading to land on, for a note opened from a deadline's topic. Only
+  // ever one that is in the body: a missing heading is reported by the caller,
+  // which has the body before this mounts.
+  jump?: string | null
 }
 
 export default function Editor({
@@ -238,6 +255,7 @@ export default function Editor({
   mathLabel,
   focus,
   onChange,
+  jump = null,
 }: Props) {
   const scroll = useRef<HTMLDivElement>(null)
   const host = useRef<HTMLDivElement>(null)
@@ -687,6 +705,35 @@ export default function Editor({
     })
     return () => subscription.unsubscribe()
   }, [noteId])
+
+  // A subscription and not a read on mount, for the reason the one above
+  // watches the note: a deadline added anywhere has to light up a heading in a
+  // note that is already open. Compared before dispatching, because ticking a
+  // deadline off also wakes this and changes nothing here.
+  const marked = useRef<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    marked.current = new Set()
+    const subscription = observeDeadlines().subscribe((rows) => {
+      const current = view.current
+      const names = namedIn(rows, noteId)
+      if (current === null || sameNames(names, marked.current)) return
+      marked.current = names
+      markTopics(current, { names })
+    })
+    return () => subscription.unsubscribe()
+  }, [noteId])
+
+  useEffect(() => {
+    const current = view.current
+    if (current === null || jump === null) return
+    const pos = headingAt(current.state.doc, jump)
+    if (pos === null) return
+    const dom = current.view.nodeDOM(pos)
+    if (dom instanceof HTMLElement) dom.scrollIntoView({ block: 'start' })
+    markTopics(current, { flash: jump })
+    const timer = setTimeout(() => markTopics(current, { flash: null }), FLASH_MS)
+    return () => clearTimeout(timer)
+  }, [jump, noteId])
 
   const close = () => {
     edit(null)

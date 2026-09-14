@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { Note } from '../../db/schema.ts'
+import type { Deadline, Note, Topic } from '../../db/schema.ts'
 import Icon from '../../ui/Icon.tsx'
 import NoteRow from '../notes/NoteRow.tsx'
 import { divide, relative, useMinute } from '../notes/relative.ts'
 import ActivityStrip from './ActivityStrip.tsx'
 import ClassMenu from './ClassMenu.tsx'
+import DeadlineList from './DeadlineList.tsx'
+import DeadlineModal from './DeadlineModal.tsx'
 import InlineText from './InlineText.tsx'
+import NextDeadline from './NextDeadline.tsx'
 import type { Selection } from './selection.ts'
 
 // Lower than autosave's 500ms: this is a read, and it has to feel immediate.
@@ -31,6 +34,8 @@ export type BookCard = {
 
 type Props = {
   kind: Selection['kind']
+  // Null unless kind is 'class'.
+  classId: string | null
   heading: string
   code: string | null
   colour: string | null
@@ -43,6 +48,8 @@ type Props = {
   // The shelf itself, which the strip and the state line are about: neither
   // should change shape because somebody is typing in the search box.
   all: Note[]
+  // The class's deadlines, soonest first. Empty on Today and Unfiled.
+  deadlines: Deadline[]
   query: string
   toggle: ReactNode
   // Shown on a first run, when there are no classes to have selected. Part
@@ -55,6 +62,7 @@ type Props = {
   onOpenBook: (id: string) => void
   onCreateBook: (name: string) => void
   onDelete: (id: string) => void
+  onOpenTopic: (topic: Topic) => void
   onRename: (name: string) => void
   onCode: (code: string) => void
   onColour: (colour: string) => void
@@ -65,6 +73,7 @@ type Props = {
 
 export default function ClassPage({
   kind,
+  classId,
   heading,
   code,
   colour,
@@ -72,6 +81,7 @@ export default function ClassPage({
   notes,
   all,
   books,
+  deadlines,
   query,
   toggle,
   notice,
@@ -81,6 +91,7 @@ export default function ClassPage({
   onOpenBook,
   onCreateBook,
   onDelete,
+  onOpenTopic,
   onRename,
   onCode,
   onColour,
@@ -111,6 +122,7 @@ export default function ClassPage({
   // field: there is no shortcut and no notice that starts a collegebook.
   const [naming, setNaming] = useState(false)
   const [bookName, setBookName] = useState('')
+  const [adding, setAdding] = useState(false)
 
   useEffect(() => {
     // Bailing out when the two already agree keeps the clear button, which
@@ -194,17 +206,18 @@ export default function ClassPage({
               onSemester={onSemester}
               onArchive={onArchive}
               onDelete={onDeleteClass}
+              onNewDeadline={() => setAdding(true)}
             />
           </div>
         )}
       </header>
+      {/* Above the strip, which records what was done: this is the one thing
+          on the page asking for something. */}
+      <NextDeadline deadlines={deadlines} now={now} onOpenTopic={onOpenTopic} />
       {/* Only a class has weeks. Today is every class at once, and Unfiled is
           not a course. */}
       {kind === 'class' && <ActivityStrip notes={all} />}
       {notice}
-      {/* The deadline lands here in a later change. Deliberately empty: the
-          gap is built now so the page does not move when it arrives. */}
-      <div className="slot" />
       {/* Cards rather than rows, because a collegebook is a container you
           open and a note is a document you read. Mixing them into one list
           would make the two look like the same kind of thing. */}
@@ -272,6 +285,13 @@ export default function ClassPage({
           </li>
         </ul>
       </section>
+      {/* Below the collegebooks: writing is more frequent than checking, so
+          the books keep the place the hand goes to. */}
+      <DeadlineList
+        deadlines={deadlines}
+        now={now}
+        onAdd={() => setAdding(true)}
+      />
       <div className="page-tools">
         <div className="search">
           <input
@@ -318,6 +338,12 @@ export default function ClassPage({
       </ul>
       {searching && notes.length === 0 && (
         <p className="empty-list">{t('notes.emptySearch')}</p>
+      )}
+      {adding && classId !== null && (
+        <DeadlineModal
+          fixedClass={{ id: classId, name: heading }}
+          onClose={() => setAdding(false)}
+        />
       )}
     </div>
   )

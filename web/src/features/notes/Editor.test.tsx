@@ -5,10 +5,12 @@ import { Editor as BareEditor } from '@tiptap/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n/index.ts'
 import { db, type Note } from '../../db/schema.ts'
+import { createDeadline } from '../../db/deadlines.ts'
 import { updateNote } from '../../db/notes.ts'
 import CSS from '../../index.css?raw'
 import Editor, { editorExtensions, type OpenMath } from './Editor.tsx'
 import { outline } from './outline.ts'
+import { markTopics } from './topics.ts'
 import { useAutosave } from './useAutosave.ts'
 
 const ID = '0199a0f0-0000-7000-8000-000000000001'
@@ -1195,5 +1197,71 @@ describe('block menu', () => {
 
     expect(seen).not.toHaveBeenCalled()
     expect(blockMenu(container)).toBeNull()
+  })
+})
+
+describe('topic highlight', () => {
+  const OTHER = '0199a0f0-0000-7000-8000-000000000002'
+  const BODY =
+    '# Diskrétna matematika\n\n## Množiny\n\nText.\n\n## Relácie\n\nViac textu.'
+
+  const marked = (container: HTMLElement) =>
+    [...container.querySelectorAll('.topic-marked')].map((node) => node.textContent)
+
+  beforeEach(async () => {
+    await db.notes.clear()
+    await db.deadlines.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  it('marks a heading a deadline names in this note and nothing else', async () => {
+    // Relácie is named too, but in another note: matching on the heading text
+    // alone would mark it here.
+    await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-01T00:00:00.000Z',
+      topics: [
+        { noteId: ID, heading: 'Množiny' },
+        { noteId: OTHER, heading: 'Relácie' },
+      ],
+    })
+
+    const { container } = await open(BODY, false)
+
+    await waitFor(() => expect(marked(container)).toEqual(['Množiny']))
+  })
+
+  it('marks a heading in an open note when a deadline is added elsewhere', async () => {
+    const { container } = await open(BODY, false)
+    expect(marked(container)).toEqual([])
+
+    await act(async () => {
+      await createDeadline({
+        title: 'Zápočet',
+        dueAt: '2026-10-08T00:00:00.000Z',
+        topics: [{ noteId: ID, heading: 'Relácie' }],
+      })
+    })
+
+    await waitFor(() => expect(marked(container)).toEqual(['Relácie']))
+  })
+
+  it('keeps the highlight out of the markdown', () => {
+    const editor = new BareEditor({
+      element: document.createElement('div'),
+      extensions: editorExtensions(),
+      content: BODY,
+      contentType: 'markdown',
+    })
+
+    markTopics(editor, { names: new Set(['Množiny']), flash: 'Relácie' })
+
+    // Both painted, so the assertion below is about a highlighted note.
+    expect(editor.view.dom.querySelectorAll('.topic-marked')).toHaveLength(2)
+    expect(editor.getMarkdown()).toBe(BODY)
+    editor.destroy()
   })
 })
