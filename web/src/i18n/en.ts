@@ -100,6 +100,16 @@ export const en = {
     'Delete {{name}} and its {{count}} note? This cannot be undone.',
   'class.deleteConfirm_other':
     'Delete {{name}} and its {{count}} notes? This cannot be undone.',
+  'class.deleteConfirmDeadlines_one':
+    'Delete {{name}} and its {{count}} deadline? This cannot be undone.',
+  'class.deleteConfirmDeadlines_other':
+    'Delete {{name}} and its {{count}} deadlines? This cannot be undone.',
+  // Two counts in one sentence, so neither can be the key's own {{count}}:
+  // i18next pluralises on one number at a time. The halves are pluralised
+  // separately through notes.count and deadlines.count and arrive here already
+  // written, which is also what keeps the Slovak forms independent.
+  'class.deleteConfirmBoth':
+    'Delete {{name}}, {{notes}} and {{deadlines}}? This cannot be undone.',
   'search.label': 'Search notes',
   'search.placeholder': 'Search',
   'search.clear': 'Clear search',
@@ -145,6 +155,8 @@ export const en = {
   'notes.deleteConfirm': 'Delete “{{title}}”? This cannot be undone.',
   'notes.count_one': '{{count}} note',
   'notes.count_other': '{{count}} notes',
+  'deadlines.count_one': '{{count}} deadline',
+  'deadlines.count_other': '{{count}} deadlines',
   'notes.moreHeadings_one': '+{{count}} more',
   'notes.moreHeadings_other': '+{{count}} more',
   'notes.emptySearch': 'No notes match your search.',

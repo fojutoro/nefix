@@ -1,7 +1,12 @@
 import { db } from '../db/schema.ts'
 import { pull, type PullResponse } from './api.ts'
 import { notePull } from './debug.ts'
-import { fromWire, fromWireClass, fromWireNotebook } from './push.ts'
+import {
+  fromWire,
+  fromWireClass,
+  fromWireDeadline,
+  fromWireNotebook,
+} from './push.ts'
 import type { PullSummary } from './state.ts'
 
 // One row, in the same database as the notes it describes. In localStorage it
@@ -27,7 +32,7 @@ async function applyPage(response: PullResponse): Promise<number> {
   // last, so the page applies wholly or not at all. Advancing the cursor
   // before the rows are stored is how a crash mid-apply loses them for ever:
   // they are below the cursor, so nothing ever asks for them again and
-  // nothing reports it. All three arrays share the one cursor, so they share
+  // nothing reports it. All four arrays share the one cursor, so they share
   // the one transaction too — storing it after the notes but before the
   // notebooks would leave exactly the split view the single cursor prevents.
   await db.transaction(
@@ -35,10 +40,12 @@ async function applyPage(response: PullResponse): Promise<number> {
     db.classes,
     db.notebooks,
     db.notes,
+    db.deadlines,
     db.meta,
     async () => {
-      // Classes, then notebooks, then notes, matching the order the server
-      // applied them in.
+      // Classes, then notebooks, then notes, then deadlines, matching the
+      // order the server applied them in: a deadline's topics name notes, so
+      // the notes are in place before anything points at them.
       for (const remote of response.classes) {
         const local = await db.classes.get(remote.id)
         if (local !== undefined && local.dirty) continue
@@ -64,6 +71,12 @@ async function applyPage(response: PullResponse): Promise<number> {
         await db.notes.put(fromWire(remote))
         applied += 1
       }
+      for (const remote of response.deadlines) {
+        const local = await db.deadlines.get(remote.id)
+        if (local !== undefined && local.dirty) continue
+        await db.deadlines.put(fromWireDeadline(remote))
+        applied += 1
+      }
       await db.meta.put({ key: CURSOR, value: response.cursor })
     },
   )
@@ -84,7 +97,8 @@ export async function pullRemoteChanges(): Promise<PullSummary> {
     const rows =
       response.classes.length +
       response.notebooks.length +
-      response.notes.length
+      response.notes.length +
+      response.deadlines.length
     received.classes += response.classes.length
     received.notebooks += response.notebooks.length
     received.notes += response.notes.length

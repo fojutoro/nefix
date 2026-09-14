@@ -86,6 +86,46 @@ export type Notebook = {
   syncedAt: string | null
 }
 
+// A link from a deadline into the reader's own notes: what to revise, and
+// where to find it. A note id and the heading text together, never one or the
+// other — the text alone dangles the moment a heading is renamed, and the id
+// alone cannot say which part of a long note is meant. Together they degrade
+// gracefully: the note still opens, and the heading is either found or
+// reported missing.
+export type Topic = {
+  noteId: string
+  heading: string
+}
+
+export type Deadline = {
+  id: string
+  // Null is a loose deadline, which belongs to no class and is a real case.
+  classId: string | null
+  title: string
+  kind: 'test' | 'assignment' | 'other'
+  // A date, not a moment: ISO 8601 at midnight UTC, so it matches how every
+  // other timestamp here is stored and sorts lexically. The time component
+  // means nothing and nothing may read it — a test is on Friday, not at
+  // 14:30. See db/deadlines.ts for what "today" means against it.
+  dueAt: string
+  note: string | null
+  // Parsed, unlike a notebook's settings, because the client is what
+  // understands a topic — a picker reads these, the server never does. They
+  // are serialised to JSON at the wire boundary and nowhere else, and nothing
+  // rebuilds the objects, so a key written by a newer client survives.
+  topics: Topic[]
+  // Set means ticked off. Not deletedAt: a finished deadline is still a
+  // deadline and still syncs.
+  doneAt: string | null
+  createdAt: string
+  updatedAt: string
+  deletedAt: string | null
+
+  version: number
+  dirty: boolean
+  syncedAt: string | null
+}
+
 // A key/value row. The sync cursor lives here and not in localStorage: it
 // describes the notes in this database, so clearing one without the other
 // would leave the client believing it holds notes it does not have.
@@ -197,12 +237,26 @@ export function declareSchema(db: Dexie): void {
         notebook.settings = null
       }),
   )
+
+  // A new store, so this is a delta like v3's and needs no upgrade function:
+  // a device arriving at v7 has never held a deadline, and there is nothing
+  // to backfill.
+  //
+  // dueAt is indexed because listUpcoming and listOverdue order by it. doneAt
+  // is not, and deliberately: it is null on every outstanding deadline, a
+  // null never enters an IndexedDB index, so an index there would hold the
+  // ticked-off rows only — the exact inversion of what those two reads want.
+  // They filter it in memory, as the rest of this file filters dirty.
+  db.version(7).stores({
+    deadlines: 'id, classId, dueAt, updatedAt, deletedAt',
+  })
 }
 
 export const db = new Dexie('nefix') as Dexie & {
   notes: EntityTable<Note, 'id'>
   classes: EntityTable<Class, 'id'>
   notebooks: EntityTable<Notebook, 'id'>
+  deadlines: EntityTable<Deadline, 'id'>
   meta: EntityTable<Meta, 'key'>
 }
 

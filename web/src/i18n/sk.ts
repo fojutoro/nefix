@@ -101,6 +101,19 @@ export const sk = {
     'Odstrániť {{name}} a {{count}} poznámky? Túto akciu nemožno vrátiť.',
   'class.deleteConfirm_other':
     'Odstrániť {{name}} a {{count}} poznámok? Túto akciu nemožno vrátiť.',
+  'class.deleteConfirmDeadlines_one':
+    'Odstrániť {{name}} a {{count}} termín? Túto akciu nemožno vrátiť.',
+  'class.deleteConfirmDeadlines_few':
+    'Odstrániť {{name}} a {{count}} termíny? Túto akciu nemožno vrátiť.',
+  'class.deleteConfirmDeadlines_many':
+    'Odstrániť {{name}} a {{count}} termíny? Túto akciu nemožno vrátiť.',
+  'class.deleteConfirmDeadlines_other':
+    'Odstrániť {{name}} a {{count}} termínov? Túto akciu nemožno vrátiť.',
+  // A comma and one 'a', not two: "Odstrániť X a 3 poznámky a 2 termíny"
+  // stacks the conjunction. The halves arrive already pluralised, so each
+  // keeps its own Slovak form.
+  'class.deleteConfirmBoth':
+    'Odstrániť {{name}}, {{notes}} a {{deadlines}}? Túto akciu nemožno vrátiť.',
   'search.label': 'Hľadať v poznámkach',
   'search.placeholder': 'Hľadať',
   'search.clear': 'Zrušiť hľadanie',
@@ -154,6 +167,10 @@ export const sk = {
   'notes.count_few': '{{count}} poznámky',
   'notes.count_many': '{{count}} poznámky',
   'notes.count_other': '{{count}} poznámok',
+  'deadlines.count_one': '{{count}} termín',
+  'deadlines.count_few': '{{count}} termíny',
+  'deadlines.count_many': '{{count}} termíny',
+  'deadlines.count_other': '{{count}} termínov',
   'notes.moreHeadings_one': '+{{count}} ďalší',
   'notes.moreHeadings_few': '+{{count}} ďalšie',
   'notes.moreHeadings_many': '+{{count}} ďalšie',

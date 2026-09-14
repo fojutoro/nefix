@@ -16,6 +16,7 @@ import {
   writeLastClassId,
   writeLastWrittenClassId,
 } from './db/classes.ts'
+import { createDeadline } from './db/deadlines.ts'
 import {
   createCollegebook,
   createNotebook,
@@ -295,6 +296,7 @@ describe('App auth wall', () => {
     await db.notes.clear()
     await db.classes.clear()
     await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     // Call history only, not the implementations set below: one test's sign
@@ -480,6 +482,7 @@ describe('App class rail', () => {
     await db.notes.clear()
     await db.classes.clear()
     await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)
@@ -828,6 +831,7 @@ describe('App two panes', () => {
     await db.notes.clear()
     await db.classes.clear()
     await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)
@@ -1039,6 +1043,7 @@ describe('App class controls', () => {
     await db.notes.clear()
     await db.classes.clear()
     await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)
@@ -1253,6 +1258,82 @@ describe('App class controls', () => {
     )
   })
 
+  it('names the deadline count beside the note count', async () => {
+    const discrete = await seedClass('Diskrétna matematika')
+    const notebook = (await listNotebooks(discrete.id))[0]!
+    await createNote({ title: 'Množiny', notebookId: notebook.id })
+    await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: discrete.id,
+    })
+    await createDeadline({
+      title: 'Zápočet',
+      dueAt: '2026-10-16T00:00:00.000Z',
+      classId: discrete.id,
+    })
+    // A loose one, which this class is not taking with it and which the
+    // sentence must therefore not count.
+    await createDeadline({ title: 'Voľná', dueAt: '2026-10-11T00:00:00.000Z' })
+
+    render(<App />)
+    await openClass()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Class actions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled())
+    expect(vi.mocked(window.confirm).mock.calls[0]![0]).toBe(
+      'Delete Diskrétna matematika, 1 note and 2 deadlines? This cannot be undone.',
+    )
+  })
+
+  it('names the deadlines alone when the class has no notes', async () => {
+    const zoo = await seedClass('Zoológia')
+    await createDeadline({
+      title: 'Exkurzia',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: zoo.id,
+    })
+
+    render(<App />)
+    await openClass('Zoológia')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Class actions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled())
+    expect(vi.mocked(window.confirm).mock.calls[0]![0]).toBe(
+      'Delete Zoológia and its 1 deadline? This cannot be undone.',
+    )
+  })
+
+  it('destroys the class\'s deadlines and spares the loose ones', async () => {
+    const discrete = await seedClass('Diskrétna matematika')
+    const mine = await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: discrete.id,
+    })
+    const loose = await createDeadline({
+      title: 'Voľná',
+      dueAt: '2026-10-11T00:00:00.000Z',
+    })
+
+    render(<App />)
+    await openClass()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Class actions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await screen.findByRole('heading', { name: 'Today' })
+    await waitFor(async () => {
+      expect((await db.deadlines.get(mine.id))!.deletedAt).not.toBeNull()
+    })
+    expect(await db.deadlines.get(mine.id)).toMatchObject({ dirty: true })
+    expect(await db.deadlines.get(loose.id)).toMatchObject({ deletedAt: null })
+  })
+
 })
 
 describe('App table of contents', () => {
@@ -1260,6 +1341,7 @@ describe('App table of contents', () => {
     await db.notes.clear()
     await db.classes.clear()
     await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)
@@ -1408,6 +1490,7 @@ describe('App collegebooks', () => {
     await db.notes.clear()
     await db.classes.clear()
     await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)

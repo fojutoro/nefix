@@ -66,6 +66,30 @@ export type PushNotebook = {
   deleted_at: string | null
 }
 
+export type PushDeadline = {
+  id: string
+  // May be null: a loose deadline belongs to no class. May also name a class
+  // the server has not been given yet.
+  class_id: string | null
+  title: string
+  kind: 'test' | 'assignment' | 'other'
+  // A date, at midnight UTC. The time component means nothing — a test is on
+  // Friday, not at 14:30 — and what "today" means is decided on the client,
+  // against the reader's own calendar. See db/deadlines.ts.
+  due_at: string
+  note: string | null
+  // The topics, as JSON text rather than a nested array. The server stores
+  // these bytes without reading them, and sending an array would mean it
+  // decoding and re-encoding them, dropping any key a newer client put in a
+  // topic. This client parses them, since it is what understands a topic, but
+  // only ever at this boundary. Null is a deadline with no topics.
+  topics: string | null
+  // Set means ticked off, and is not deleted_at.
+  done_at: string | null
+  version: number
+  deleted_at: string | null
+}
+
 // What the server sends back: what was sent plus the fields only it may
 // assign and the timestamps it stores.
 type Assigned = {
@@ -78,31 +102,35 @@ type Assigned = {
 export type WireNote = PushNote & Assigned
 export type WireClass = PushClass & Assigned
 export type WireNotebook = PushNotebook & Assigned
+export type WireDeadline = PushDeadline & Assigned
 
 export type PushResult = {
   id: string
-  // Which local store the result refers to. Ids are unique across the three,
+  // Which local store the result refers to. Ids are unique across the four,
   // but the client still has to know which table to write, and reading that
   // from whichever field came back populated breaks on forbidden, which
   // carries no row at all.
-  kind: 'class' | 'notebook' | 'note'
+  kind: 'class' | 'notebook' | 'note' | 'deadline'
   status: 'accepted' | 'conflict' | 'forbidden'
   // Absent on forbidden: a client that guessed an id learns only that it may
   // not write there.
   class?: WireClass
   notebook?: WireNotebook
   note?: WireNote
+  deadline?: WireDeadline
 }
 
 // Named arrays, applied by the server in the order they are listed here:
-// classes, then notebooks, then notes. A class and its general notebook are
-// created in one gesture and travel in one request, and dependency order
-// means the server never briefly holds a notebook whose class it has not
-// seen.
+// classes, then notebooks, then notes, then deadlines. A class and its
+// general notebook are created in one gesture and travel in one request, and
+// dependency order means the server never briefly holds a notebook whose
+// class it has not seen. Deadlines last because their topics reference notes,
+// so the notes take the lower seqs and a pull replays them first.
 export type PushRequest = {
   classes: PushClass[]
   notebooks: PushNotebook[]
   notes: PushNote[]
+  deadlines: PushDeadline[]
 }
 
 export type PushResponse = {
@@ -113,6 +141,7 @@ export type PullResponse = {
   classes: WireClass[]
   notebooks: WireNotebook[]
   notes: WireNote[]
+  deadlines: WireDeadline[]
   // The highest seq in the page, or the `since` that was sent when the page
   // is empty. An empty pull must not rewind a client to the start.
   cursor: number
