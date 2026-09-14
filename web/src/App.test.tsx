@@ -286,24 +286,35 @@ describe('App remembering the open note', () => {
     const note = await createNote({ title: 'Zmazaná', bodyMd: 'text' })
     await deleteNote(note.id)
     await db.meta.put({ key: 'lastNoteId', value: note.id })
+    await db.meta.put({ key: 'railWidth', value: 300 })
 
     render(<App />)
 
     await home()
-    await settle()
-    expect(editor()).toBeNull()
+    // The restore reads the width with the note and applies both in one
+    // render, so a 300px rail means it has landed and anything it was going to
+    // open is already committed. The branch is checked and not .tiptap, which
+    // trails that commit by an effect.
+    await waitFor(() =>
+      expect(document.querySelector('.app')!.getAttribute('style')).toContain('300px'),
+    )
+    expect(document.querySelector('.note')).toBeNull()
   })
 
   it('falls back to Home when the remembered id is not in the database', async () => {
     await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
     await db.meta.put({ key: 'lastNoteId', value: 'no-such-note' })
+    await db.meta.put({ key: 'railWidth', value: 300 })
 
     render(<App />)
 
     // Home, not an editor: a remembered id that names nothing may not open
-    // anything.
+    // anything. Waited on the restore landing, for the reason given above.
+    await waitFor(() =>
+      expect(document.querySelector('.app')!.getAttribute('style')).toContain('300px'),
+    )
     await screen.findByRole('button', { name: /^Diskrétna/ })
-    expect(editor()).toBeNull()
+    expect(document.querySelector('.note')).toBeNull()
   })
 })
 
@@ -864,7 +875,14 @@ describe('App two panes', () => {
     // heading paints a frame before the read behind it lands.
     await screen.findByRole('list', { name: 'Weeks written in' })
     expect(noteRows()).toHaveLength(3)
-    expect(editor()).toBeNull()
+    // Settled once the choice has been remembered, which an effect does after
+    // the commit that made it. An editor opened by the same choice would be in
+    // that commit, so the branch is checked and not .tiptap, which trails it.
+    const [discrete] = await db.classes.toArray()
+    await waitFor(async () =>
+      expect((await db.meta.get('lastClassId'))?.value).toBe(discrete!.id),
+    )
+    expect(document.querySelector('.note')).toBeNull()
   })
 
   it('opens the editor on a card and returns to the class page on Escape', async () => {
@@ -884,7 +902,12 @@ describe('App two panes', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
 
     await screen.findByRole('heading', { name: 'Diskrétna matematika' })
-    expect(editor()).toBeNull()
+    // Settled once leaving has been remembered: the effect that clears the
+    // stored note runs after the commit that closed it.
+    await waitFor(async () =>
+      expect(await db.meta.get('lastNoteId')).toBeUndefined(),
+    )
+    expect(document.querySelector('.note')).toBeNull()
   })
 
   it('returns to the class page with the back button', async () => {
@@ -1776,7 +1799,11 @@ describe('App deadline topics', () => {
     fireEvent.click(await chip('Relácie'))
 
     await screen.findByText('“Relácie” is no longer in this note.')
-    expect(editor()).not.toBeNull()
+    // The message and the editor's branch commit together, but TipTap builds
+    // .tiptap in an effect after that commit, so it is waited for.
+    await waitFor(() => expect(editor()).not.toBeNull())
+    // After the editor exists, so "it did not scroll" is said of an editor
+    // that could have.
     expect(scroll).not.toHaveBeenCalled()
   })
 
@@ -1788,7 +1815,11 @@ describe('App deadline topics', () => {
     fireEvent.click(await chip('Operácie'))
 
     await screen.findByText('The note with “Operácie” has been deleted.')
-    expect(editor()).toBeNull()
+    // openTopic returns once it has said so, so the message is its last commit
+    // and an editor it opened would be in the same one. The branch is checked
+    // and not .tiptap, which trails that commit by an effect.
+    expect(document.querySelector('.note')).toBeNull()
+    screen.getByRole('heading', { name: 'Diskrétna matematika' })
   })
 })
 
