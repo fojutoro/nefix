@@ -217,21 +217,23 @@ No request body.
 
 Two endpoints, both requiring a session. A client pushes what it has
 changed and pulls what it has not seen. The server stores classes,
-notebooks and notes; it does not decide what any of them should say.
+notebooks, notes and deadlines; it does not decide what any of them
+should say.
 
 A class contains notebooks and a notebook contains notes, but neither
 containment is required. A notebook may exist without a class, and a note
 without a notebook — an unfiled note is a real case and must not require
-setting anything up first.
+setting anything up first. A deadline belongs to a class or to nothing,
+on the same principle.
 
-### The three objects
+### The four objects
 
 Every id is a UUIDv7 minted by the client. The server never generates one:
-a class, notebook or note has to be creatable offline with no round trip,
-so the id exists before the server has heard of the row. The server
-validates the shape and nothing more.
+a class, notebook, note or deadline has to be creatable offline with no
+round trip, so the id exists before the server has heard of the row. The
+server validates the shape and nothing more.
 
-`version` and `seq` are the server's on all three. A client sends the
+`version` and `seq` are the server's on all four. A client sends the
 `version` it last saw and never invents one; `seq` it only ever reads.
 
 The class object:
@@ -332,6 +334,76 @@ means readable by its author and nobody else, because `users.faculty_id`
 is always NULL until faculty assignment exists and so no reader can
 match. That is the intended behaviour rather than a gap.
 
+The deadline object:
+
+```json
+{ "id": "0192f0d1-3c4d-7e8f-9a0b-1c2d3e4f5a6b",
+  "class_id": "0192f0b1-3c4d-7e8f-9a0b-1c2d3e4f5a6b",
+  "title": "Písomka z diskrétnej matematiky", "kind": "test",
+  "due_at": "2026-10-09T00:00:00Z", "note": "prines kalkulačku",
+  "topics": "[{\"noteId\":\"0192f0a1-…\",\"heading\":\"Množiny\"}]",
+  "done_at": null, "version": 1, "seq": 15,
+  "created_at": "2026-09-14T09:30:00Z", "updated_at": "2026-09-14T09:30:00Z",
+  "deleted_at": null }
+```
+
+A deadline is a dated thing a student must do: a test, an assignment, a
+form to hand in.
+
+`class_id` may be null — a loose deadline belongs to no class — and, like
+`class_id` on a notebook, may name a class the server has not been given
+yet. Nothing resolves it server-side.
+
+`due_at` is **a date, not a moment**. A test is on Friday, not at 14:30.
+It is sent and returned as RFC 3339 with the time at midnight UTC, so it
+looks like every other timestamp here, but that time component carries no
+meaning and no reader may use it. What "today" means is the client's
+question, answered against the reader's own calendar: a student in
+Bratislava at 23:00 on Thursday must not be shown Friday's test as
+overdue, and normalising "today" to UTC for consistency with the storage
+format is exactly the bug that produces. It is the one timestamp a client
+must send; absent or unparseable is a 400, never a silent zero time.
+
+`kind` is `test`, `assignment` or `other`, and **absent means `other`**,
+for the reason an absent notebook `kind` means `notes`: a client written
+before this field existed sends none and keeps syncing. Any other value
+is a 400. The column carries no CHECK, so that a kind from a future
+client is refused here with a message naming the row rather than failing
+a constraint and reading as a server fault.
+
+`done_at` set means ticked off, and is not `deleted_at`: a finished
+deadline is still a deadline and still comes back from a pull. It is an
+ordinary field on an ordinary update, as `archived_at` is on a class.
+
+`topics` is what to revise for this deadline — links into the author's
+own notes, so opening a deadline shows the material and clicking a topic
+opens the note at that heading. Each topic is **a note id and the heading
+text together**, never one or the other: the text alone dangles when a
+heading is renamed, and the id alone cannot say which part of a long note
+is meant. Together they degrade gracefully — the note still opens, and
+the heading is either found or reported missing.
+
+Like `settings` on a notebook it is **a JSON string, not a nested array**,
+and the server stores and returns those bytes unchanged. It does not parse
+them, has no schema for them, and hands back keys it has never heard of
+exactly as they were sent. The two rules are the same two: at most **8192
+bytes** and valid JSON, either failure a 400 naming the deadline. Absent
+is null.
+
+### What each refusal status means
+
+So that the next field with a cap has a precedent rather than a coin toss:
+
+- **400** — the request is well formed but a row in it is not: a field is
+  malformed, carries an unknown value, or is over **its own** cap.
+  `settings` over 4096 bytes and `topics` over 8192 are both 400, and the
+  message names the row.
+- **413** — the **request** is too big, whatever is in it: over 100 rows
+  in any one array, or over 1 MB of body. The message names the array.
+
+The distinction is what the client does next. A 413 is retryable by
+splitting the batch; a 400 is a client bug that splitting will not fix.
+
 ### Why the cursor is a sequence and not a timestamp
 
 `seq` is a per-user counter, incremented inside the same transaction
@@ -347,11 +419,12 @@ for ever. Neither is fixable at the edges, and the failure is silent:
 the row is simply never mentioned again, and nothing reports an error.
 A counter cannot collide, so the question does not arise.
 
-### One cursor for all three types
+### One cursor for all four types
 
 There is one counter, `users.last_seq`, and one cursor. A class, a
-notebook and a note written in that order take seqs 1, 2 and 3, and a
-pull returns whatever changed above the cursor whatever type it is.
+notebook, a note and a deadline written in that order take seqs 1, 2, 3
+and 4, and a pull returns whatever changed above the cursor whatever type
+it is.
 
 Two cursors would let a client hold a consistent view of its notes and a
 stale one of the notebooks those notes sit in.
@@ -373,10 +446,17 @@ stale one of the notebooks those notes sit in.
       "title": "Diskrétna matematika", "body_md": "# Množiny",
       "visibility": "private", "forked_from_id": null,
       "version": 2, "deleted_at": null }
+  ],
+  "deadlines": [
+    { "id": "0192f0d1-…", "class_id": "0192f0b1-…",
+      "title": "Písomka z diskrétnej matematiky", "kind": "test",
+      "due_at": "2026-10-09T00:00:00Z", "note": null,
+      "topics": "[{\"noteId\":\"0192f0a1-…\",\"heading\":\"Množiny\"}]",
+      "done_at": null, "version": 0, "deleted_at": null }
   ] }
 ```
 
-Three named arrays, not one list with a `type` discriminator. Each kind
+Four named arrays, not one list with a `type` discriminator. Each kind
 has different fields, and a tagged union on the wire would mean decoding
 the body twice. Any array may be absent or empty.
 
@@ -386,16 +466,18 @@ returned unchanged: a delete is a row like any other, and a soft delete
 has to reach the other device or the row stays there.
 
 **The arrays are applied in the order they are listed: classes, then
-notebooks, then notes.** A client creating a class and its general
-notebook in one gesture pushes both in one request, and dependency order
-means the server never briefly holds a notebook whose class it has not
-seen. The order also decides the seqs, so a pull replays the three in the
-order they were created.
+notebooks, then notes, then deadlines.** A client creating a class and its
+general notebook in one gesture pushes both in one request, and dependency
+order means the server never briefly holds a notebook whose class it has
+not seen. Deadlines come last because their `topics` reference notes:
+nothing server-side resolves a topic, but the order decides the seqs, and
+a pull replays them in that same order — so a client applying a page never
+meets a topic before the note it names.
 
-At most 100 classes, 100 notebooks and 100 notes — three separate limits,
-each checked on its own array — and 1 MB for the whole body. A larger
-batch is 413 and the client splits it. The byte ceiling is the real
-limit; the counts keep one array from monopolising it.
+At most 100 classes, 100 notebooks, 100 notes and 100 deadlines — four
+separate limits, each checked on its own array — and 1 MB for the whole
+body. A larger batch is 413 and the client splits it. The byte ceiling is
+the real limit; the counts keep one array from monopolising it.
 
 Each row is processed in its own transaction, so one conflict does not
 roll back its neighbours. The response reports every row in the order it
@@ -406,17 +488,18 @@ request body:
 { "results": [
   { "id": "0192f0b1-…", "kind": "class",    "status": "accepted", "class": { } },
   { "id": "0192f0c1-…", "kind": "notebook", "status": "conflict", "notebook": { } },
-  { "id": "0192f0a1-…", "kind": "note",     "status": "forbidden" }
+  { "id": "0192f0a1-…", "kind": "note",     "status": "forbidden" },
+  { "id": "0192f0d1-…", "kind": "deadline", "status": "accepted", "deadline": { } }
 ] }
 ```
 
-`kind` is `class`, `notebook` or `note` and says which local store the
-result refers to. Ids are unique across the three, but a client still has
-to know which table to write, and inferring it from which field came back
-populated breaks on `forbidden`, which carries no row at all.
+`kind` is `class`, `notebook`, `note` or `deadline` and says which local
+store the result refers to. Ids are unique across the four, but a client
+still has to know which table to write, and inferring it from which field
+came back populated breaks on `forbidden`, which carries no row at all.
 
 The accepted or conflicting row travels in the field named by `kind`:
-`class`, `notebook` or `note`.
+`class`, `notebook`, `note` or `deadline`.
 
 | Status | Meaning |
 |--------|---------|
@@ -427,21 +510,21 @@ The accepted or conflicting row travels in the field named by `kind`:
 A conflict is not resolved here. The server never merges and never forks
 on its own: it reports what it holds and the client decides. It does not
 decide differently per type either — that a client forks a conflicted
-note and takes the server's copy of a conflicted class or notebook is the
-client's rule, not this endpoint's.
+note and takes the server's copy of a conflicted class, notebook or
+deadline is the client's rule, not this endpoint's.
 
 | Status | Body | When |
 |--------|------|------|
 | 200 | results | the batch was processed, whatever each row's outcome |
-| 400 | error | a row in any array is malformed: a bad id, a `class_id` or `notebook_id` that is not a UUID, an unknown `visibility`, an unknown notebook `kind`, notebook `settings` over 4096 bytes or not valid JSON, a title or name over 200 characters, a negative `version`, or an `archived_at` or `deleted_at` that is not RFC 3339. Nothing is written; the message names the row |
+| 400 | error | a row in any array is malformed: a bad id, a `class_id` or `notebook_id` that is not a UUID, an unknown `visibility`, an unknown notebook or deadline `kind`, notebook `settings` over 4096 bytes or deadline `topics` over 8192 or either not valid JSON, a title or name over 200 characters, a negative `version`, a missing or unparseable `due_at`, or an `archived_at`, `done_at` or `deleted_at` that is not RFC 3339. Nothing is written; the message names the row |
 | 401 | error | `authentication required` |
 | 403 | error | missing or invalid `X-CSRF-Token` |
 | 413 | error | over 100 rows in any one array, or over 1 MB; the message names the array |
 | 500 | error | the database failed |
 
-Validation runs over all three arrays before the first write, so a batch
+Validation runs over all four arrays before the first write, so a batch
 the server refuses leaves no half of itself behind. A malformed notebook
-refuses the classes and notes sent beside it.
+refuses the classes, notes and deadlines sent beside it.
 
 ### GET /api/v1/sync/pull
 
@@ -451,18 +534,18 @@ refuses the classes and notes sent beside it.
 | `limit` | `100` | at most 500; a larger value is clamped rather than refused. It is the size of the whole page, not of each array |
 
 ```json
-{ "classes": [ ], "notebooks": [ ], "notes": [ ], "cursor": 42,
-  "has_more": false }
+{ "classes": [ ], "notebooks": [ ], "notes": [ ], "deadlines": [ ],
+  "cursor": 42, "has_more": false }
 ```
 
 Returns only the caller's own rows, in `seq` order within each array,
-soft-deleted and archived ones included. `cursor` is the highest `seq` in
-the page across all three arrays, or the `since` that was sent when the
-page is empty — an empty pull must not rewind a client to the start of
+soft-deleted, archived and ticked-off ones included. `cursor` is the
+highest `seq` in the page across all four arrays, or the `since` that was
+sent when the page is empty — an empty pull must not rewind a client to the start of
 its history. `has_more` is true when any type had rows left over, and
 means call again with the new cursor.
 
-**A page can be entirely one type.** The three arrays are one ordered
+**A page can be entirely one type.** The four arrays are one ordered
 stream cut up by table, and a page is the `limit` lowest seqs in that
 stream, whatever mixture that turns out to be: rename six notebooks and
 the next page is six notebooks, even though classes and notes have rows
@@ -471,13 +554,13 @@ stream and which table a row came from is incidental to it. The rows that
 did not fit are above the cursor and arrive on the next call, in order.
 
 A client must therefore apply a page as a whole and store the cursor once,
-after all three arrays are written. Storing it per array, or paging each
+after all four arrays are written. Storing it per array, or paging each
 type separately, reintroduces exactly the split view the single cursor
 exists to prevent.
 
 | Status | Body | When |
 |--------|------|------|
-| 200 | classes, notebooks, notes, cursor, has_more | always, including an empty page |
+| 200 | classes, notebooks, notes, deadlines, cursor, has_more | always, including an empty page |
 | 400 | error | `since` or `limit` is not a non-negative integer |
 | 401 | error | `authentication required` |
 | 500 | error | the database failed |

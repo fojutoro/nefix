@@ -16,7 +16,7 @@ import (
 
 const (
 	maxPushBytes = 1 << 20
-	// Per array, not per request. Three arrays of a hundred is still well
+	// Per array, not per request. Four arrays of a hundred is still well
 	// inside the byte ceiling, which is the real limit on a batch.
 	maxPushRows      = 100
 	defaultPullLimit = 100
@@ -37,6 +37,15 @@ var notebookKinds = []string{"notes", "collegebook"}
 // keys and small enough that the column cannot become a file store, which is
 // the one thing an opaque TEXT column invites.
 const maxSettings = 4096
+
+// Not a CHECK on the column either, for the reason notebookKinds is not: see
+// 0009_deadlines.sql.
+var deadlineKinds = []string{"test", "assignment", "other"}
+
+// The cap on a deadline's topics blob. Larger than maxSettings because a
+// topic carries a UUID and a heading and a deadline may have many, and still
+// small enough that the column cannot become a file store.
+const maxTopics = 8192
 
 // What a client may send. The server owns seq, version arithmetic and the
 // timestamps, so none of them are fields here except the version the client
@@ -92,25 +101,53 @@ type pushNotebook struct {
 	DeletedAt *string `json:"deleted_at"`
 }
 
+type pushDeadline struct {
+	ID string `json:"id"`
+	// May name a class the server has not been given yet, and may be null: a
+	// loose deadline belongs to no class.
+	ClassID *string `json:"class_id"`
+	Title   string  `json:"title"`
+	// 'test', 'assignment' or 'other'. Absent is 'other': a client that
+	// predates this field sends no kind at all and must keep syncing.
+	Kind string `json:"kind"`
+	// A date, and the only timestamp a client must send. Its time component
+	// is midnight UTC and means nothing — a test is on Friday, not at 14:30.
+	DueAt string  `json:"due_at"`
+	Note  *string `json:"note"`
+	// The deadline's topics, as JSON text and not a nested array, for the
+	// reason a notebook's settings are text: the server stores these bytes
+	// without reading them, and decoding them here would reorder the keys and
+	// drop any this version has never heard of, so a newer client's deadline
+	// would come back from an older server with its topics quietly mangled.
+	Topics *string `json:"topics"`
+	// Set means ticked off. An ordinary field on an ordinary update, not a
+	// delete, exactly as archived_at is on a class.
+	DoneAt    *string `json:"done_at"`
+	Version   int64   `json:"version"`
+	DeletedAt *string `json:"deleted_at"`
+}
+
 // Named arrays rather than one list with a type discriminator: each kind has
 // different fields, and a tagged union on the wire would mean decoding twice.
 type pushRequest struct {
 	Classes   []pushClass    `json:"classes"`
 	Notebooks []pushNotebook `json:"notebooks"`
 	Notes     []pushNote     `json:"notes"`
+	Deadlines []pushDeadline `json:"deadlines"`
 }
 
 type pushResult struct {
 	ID string `json:"id"`
-	// Which local table the result refers to: class, notebook or note. Ids
-	// are unique across the three, but the client still has to know which
-	// store to write, and reading that from which field is populated would
-	// break the moment a row comes back without one.
+	// Which local table the result refers to: class, notebook, note or
+	// deadline. Ids are unique across the four, but the client still has to
+	// know which store to write, and reading that from which field is
+	// populated would break the moment a row comes back without one.
 	Kind     string            `json:"kind"`
 	Status   string            `json:"status"`
 	Class    *classResponse    `json:"class,omitempty"`
 	Notebook *notebookResponse `json:"notebook,omitempty"`
 	Note     *noteResponse     `json:"note,omitempty"`
+	Deadline *deadlineResponse `json:"deadline,omitempty"`
 }
 
 type pushResponse struct {
@@ -161,10 +198,29 @@ type notebookResponse struct {
 	DeletedAt *time.Time `json:"deleted_at"`
 }
 
+type deadlineResponse struct {
+	ID      string  `json:"id"`
+	ClassID *string `json:"class_id"`
+	Title   string  `json:"title"`
+	Kind    string  `json:"kind"`
+	// Marshalled as RFC 3339 like every other timestamp, with the time at
+	// midnight UTC. That time is not meaningful and no reader may use it.
+	DueAt     time.Time  `json:"due_at"`
+	Note      *string    `json:"note"`
+	Topics    *string    `json:"topics"`
+	DoneAt    *time.Time `json:"done_at"`
+	Version   int64      `json:"version"`
+	Seq       int64      `json:"seq"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	DeletedAt *time.Time `json:"deleted_at"`
+}
+
 type pullResponse struct {
 	Classes   []classResponse    `json:"classes"`
 	Notebooks []notebookResponse `json:"notebooks"`
 	Notes     []noteResponse     `json:"notes"`
+	Deadlines []deadlineResponse `json:"deadlines"`
 	Cursor    int64              `json:"cursor"`
 	HasMore   bool               `json:"has_more"`
 }
@@ -219,6 +275,24 @@ func newNotebookResponse(n *store.Notebook) *notebookResponse {
 	}
 }
 
+func newDeadlineResponse(d *store.Deadline) *deadlineResponse {
+	return &deadlineResponse{
+		ID:        d.ID,
+		ClassID:   d.ClassID,
+		Title:     d.Title,
+		Kind:      d.Kind,
+		DueAt:     d.DueAt,
+		Note:      d.Note,
+		Topics:    d.Topics,
+		DoneAt:    d.DoneAt,
+		Version:   d.Version,
+		Seq:       d.Seq,
+		CreatedAt: d.CreatedAt,
+		UpdatedAt: d.UpdatedAt,
+		DeletedAt: d.DeletedAt,
+	}
+}
+
 func isHex(r rune) bool {
 	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
@@ -259,6 +333,19 @@ func optionalTime(raw *string, field, subject string) (*time.Time, string) {
 	utc := t.UTC()
 
 	return &utc, ""
+}
+
+// due_at is the one timestamp a client has to send, so it is parsed through
+// this rather than optionalTime: absent decodes to the empty string and must
+// be named as a missing field rather than silently becoming the zero time,
+// which would file every such deadline in the year 1.
+func requiredTime(raw, field, subject string) (time.Time, string) {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, subject + ": " + field + " must be an RFC 3339 timestamp"
+	}
+
+	return t.UTC(), ""
 }
 
 // A reference to a row the server may not hold yet, which is why it is only
@@ -396,6 +483,73 @@ func (n *pushNotebook) validate() (store.NotebookInput, string) {
 	}, ""
 }
 
+func (d *pushDeadline) validate() (store.DeadlineInput, string) {
+	if !validUUID(d.ID) {
+		return store.DeadlineInput{}, "deadline id must be a UUID"
+	}
+	subject := "deadline " + d.ID
+	if utf8.RuneCountInString(d.Title) > maxName {
+		return store.DeadlineInput{}, subject + ": title must be at most 200 characters"
+	}
+	if d.Version < 0 {
+		return store.DeadlineInput{}, subject + ": version must not be negative"
+	}
+	if message := optionalUUID(d.ClassID, "class_id", subject); message != "" {
+		return store.DeadlineInput{}, message
+	}
+	// Empty is absent rather than wrong. The store turns it into 'other',
+	// which is the one place that default lives.
+	if d.Kind != "" && !slices.Contains(deadlineKinds, d.Kind) {
+		return store.DeadlineInput{}, subject + ": kind must be test, assignment or other"
+	}
+	// The same two rules as a notebook's settings, and deliberately no third:
+	// a cap, so an opaque column cannot become a file store, and valid JSON,
+	// so bytes no reader could parse are named here rather than failing on
+	// every device that pulls them. What is inside a topic is the client's
+	// business — a newer client will put keys in one that this server has
+	// never heard of, and validating them would break its sync rather than
+	// degrade it.
+	//
+	// A 400 for either, not a 413. In this API 413 means the request is too
+	// big; one field over its own cap is a bad request that names the row,
+	// which is what notebooks.settings already answers.
+	if d.Topics != nil {
+		if len(*d.Topics) > maxTopics {
+			return store.DeadlineInput{}, fmt.Sprintf(
+				"%s: topics must be at most %d bytes", subject, maxTopics)
+		}
+		if !json.Valid([]byte(*d.Topics)) {
+			return store.DeadlineInput{}, subject + ": topics must be valid JSON"
+		}
+	}
+
+	dueAt, message := requiredTime(d.DueAt, "due_at", subject)
+	if message != "" {
+		return store.DeadlineInput{}, message
+	}
+	doneAt, message := optionalTime(d.DoneAt, "done_at", subject)
+	if message != "" {
+		return store.DeadlineInput{}, message
+	}
+	deletedAt, message := optionalTime(d.DeletedAt, "deleted_at", subject)
+	if message != "" {
+		return store.DeadlineInput{}, message
+	}
+
+	return store.DeadlineInput{
+		ID:        d.ID,
+		ClassID:   d.ClassID,
+		Title:     d.Title,
+		Kind:      d.Kind,
+		DueAt:     dueAt,
+		Note:      d.Note,
+		Topics:    d.Topics,
+		DoneAt:    doneAt,
+		Version:   d.Version,
+		DeletedAt: deletedAt,
+	}, ""
+}
+
 func (s *server) push(w http.ResponseWriter, r *http.Request) {
 	user, ok := userFrom(r.Context())
 	if !ok {
@@ -414,6 +568,7 @@ func (s *server) push(w http.ResponseWriter, r *http.Request) {
 		{"classes", len(req.Classes)},
 		{"notebooks", len(req.Notebooks)},
 		{"notes", len(req.Notes)},
+		{"deadlines", len(req.Deadlines)},
 	} {
 		if array.size > maxPushRows {
 			writeError(w, http.StatusRequestEntityTooLarge,
@@ -452,15 +607,29 @@ func (s *server) push(w http.ResponseWriter, r *http.Request) {
 		}
 		noteInputs = append(noteInputs, input)
 	}
+	deadlineInputs := make([]store.DeadlineInput, 0, len(req.Deadlines))
+	for i := range req.Deadlines {
+		input, message := req.Deadlines[i].validate()
+		if message != "" {
+			writeError(w, http.StatusBadRequest, message)
+			return
+		}
+		deadlineInputs = append(deadlineInputs, input)
+	}
 
 	// One transaction per row, inside each Upsert. A conflict on the third
 	// must not undo the first two.
 	//
-	// Classes, then notebooks, then notes: dependency order within the one
-	// request. A client creating a class and its general notebook in one
-	// gesture pushes both together, and this way the server never briefly
-	// holds a notebook whose class it has not seen.
-	results := make([]pushResult, 0, len(classInputs)+len(notebookInputs)+len(noteInputs))
+	// Classes, then notebooks, then notes, then deadlines: dependency order
+	// within the one request. A client creating a class and its general
+	// notebook in one gesture pushes both together, and this way the server
+	// never briefly holds a notebook whose class it has not seen. Deadlines
+	// come last because their topics reference notes, so the notes land
+	// first — nothing here resolves a topic, but the seq order a pull
+	// replays is the same order, and a client applying it must not meet a
+	// topic before the note it names.
+	results := make([]pushResult, 0,
+		len(classInputs)+len(notebookInputs)+len(noteInputs)+len(deadlineInputs))
 
 	for _, input := range classInputs {
 		class, err := s.db.UpsertClass(r.Context(), user.ID, input)
@@ -514,6 +683,24 @@ func (s *server) push(w http.ResponseWriter, r *http.Request) {
 			return
 		default:
 			result.Status, result.Note = "accepted", newNoteResponse(note)
+		}
+		results = append(results, result)
+	}
+
+	for _, input := range deadlineInputs {
+		deadline, err := s.db.UpsertDeadline(r.Context(), user.ID, input)
+		result := pushResult{ID: input.ID, Kind: "deadline"}
+		switch {
+		case errors.Is(err, store.ErrVersionConflict):
+			result.Status, result.Deadline = "conflict", newDeadlineResponse(deadline)
+		case errors.Is(err, store.ErrForbidden):
+			result.Status = "forbidden"
+		case err != nil:
+			slog.Error("upserting deadline failed", "deadline", input.ID, "user", user.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "could not save the deadlines")
+			return
+		default:
+			result.Status, result.Deadline = "accepted", newDeadlineResponse(deadline)
 		}
 		results = append(results, result)
 	}
@@ -579,8 +766,13 @@ func (s *server) pull(w http.ResponseWriter, r *http.Request) {
 		pullFailed(w, user.ID, err)
 		return
 	}
+	deadlines, err := s.db.DeadlinesSince(r.Context(), user.ID, since, int(limit)+1)
+	if err != nil {
+		pullFailed(w, user.ID, err)
+		return
+	}
 
-	writeJSON(w, http.StatusOK, page(since, limit, classes, notebooks, notes))
+	writeJSON(w, http.StatusOK, page(since, limit, classes, notebooks, notes, deadlines))
 }
 
 func pullFailed(w http.ResponseWriter, userID int64, err error) {
@@ -588,7 +780,7 @@ func pullFailed(w http.ResponseWriter, userID int64, err error) {
 	writeError(w, http.StatusInternalServerError, "could not read the changes")
 }
 
-// The three tables are one ordered stream cut up by type, so a page is the
+// The four tables are one ordered stream cut up by type, so a page is the
 // `limit` lowest seqs across all of them and the cursor is the highest seq
 // that survived that cut. A page can therefore be entirely one type while
 // the other tables hold rows above the cursor, and that is right rather than
@@ -596,8 +788,9 @@ func pullFailed(w http.ResponseWriter, userID int64, err error) {
 // from is incidental to it. Reserving a share of the page per type, or
 // carrying a cursor per type, is what would let a client hold a consistent
 // view of its notes and a stale one of the notebooks they sit in.
-func page(since, limit int64, classes []store.Class, notebooks []store.Notebook, notes []store.Note) pullResponse {
-	seqs := make([]int64, 0, len(classes)+len(notebooks)+len(notes))
+func page(since, limit int64, classes []store.Class, notebooks []store.Notebook,
+	notes []store.Note, deadlines []store.Deadline) pullResponse {
+	seqs := make([]int64, 0, len(classes)+len(notebooks)+len(notes)+len(deadlines))
 	for i := range classes {
 		seqs = append(seqs, classes[i].Seq)
 	}
@@ -606,6 +799,9 @@ func page(since, limit int64, classes []store.Class, notebooks []store.Notebook,
 	}
 	for i := range notes {
 		seqs = append(seqs, notes[i].Seq)
+	}
+	for i := range deadlines {
+		seqs = append(seqs, deadlines[i].Seq)
 	}
 	slices.Sort(seqs)
 
@@ -625,6 +821,7 @@ func page(since, limit int64, classes []store.Class, notebooks []store.Notebook,
 		Classes:   make([]classResponse, 0, len(classes)),
 		Notebooks: make([]notebookResponse, 0, len(notebooks)),
 		Notes:     make([]noteResponse, 0, len(notes)),
+		Deadlines: make([]deadlineResponse, 0, len(deadlines)),
 		Cursor:    cursor,
 		HasMore:   hasMore,
 	}
@@ -647,6 +844,12 @@ func page(since, limit int64, classes []store.Class, notebooks []store.Notebook,
 			break
 		}
 		body.Notes = append(body.Notes, *newNoteResponse(&notes[i]))
+	}
+	for i := range deadlines {
+		if deadlines[i].Seq > cursor {
+			break
+		}
+		body.Deadlines = append(body.Deadlines, *newDeadlineResponse(&deadlines[i]))
 	}
 
 	return body
