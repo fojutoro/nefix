@@ -179,7 +179,7 @@ func TestPushRejectsAnOversizedArrayOfEveryKind(t *testing.T) {
 			}
 			// Refused before the first upsert, so nothing of any kind landed.
 			pulled := pullNotes(t, api, cookie, "?since=0")
-			if len(pulled.Classes)+len(pulled.Notebooks)+len(pulled.Notes) != 0 {
+			if len(pulled.Classes)+len(pulled.Notebooks)+len(pulled.Notes)+len(pulled.Deadlines) != 0 {
 				t.Errorf("rows were written despite the 413: %+v", pulled)
 			}
 		})
@@ -413,11 +413,11 @@ func corrupt(row map[string]any, field string, value any) map[string]any {
 	return row
 }
 
-// Every seq in a pull, in the order the three arrays would be replayed as
+// Every seq in a pull, in the order the four arrays would be replayed as
 // one stream.
 func seqsOf(page pullResponse) []int64 {
 	seqs := make([]int64, 0,
-		len(page.Classes)+len(page.Notebooks)+len(page.Notes))
+		len(page.Classes)+len(page.Notebooks)+len(page.Notes)+len(page.Deadlines))
 	for _, class := range page.Classes {
 		seqs = append(seqs, class.Seq)
 	}
@@ -426,6 +426,9 @@ func seqsOf(page pullResponse) []int64 {
 	}
 	for _, note := range page.Notes {
 		seqs = append(seqs, note.Seq)
+	}
+	for _, deadline := range page.Deadlines {
+		seqs = append(seqs, deadline.Seq)
 	}
 	slices.Sort(seqs)
 
