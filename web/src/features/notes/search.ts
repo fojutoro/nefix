@@ -6,9 +6,8 @@ import { db, type Note } from '../../db/schema.ts'
 // substrings are enough for one person's notes, and they are predictable,
 // which matters more.
 // `within` is the selected shelf: a class's notebooks, the unfiled notes, or
-// everything touched since midnight. A predicate rather than a set of ids
-// keeps Today, which is a time range and not a membership, in the same
-// argument as the other two.
+// everything for Home. A predicate rather than a set of ids lets each be the
+// same kind of argument.
 export async function searchNotes(
   query: string,
   within: (note: Note) => boolean = () => true,

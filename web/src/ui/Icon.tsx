@@ -1,7 +1,7 @@
 /* Icons vendored from Lucide (https://lucide.dev), commit
    6bbe5ddb07525b0d0056c622c550517f727d08b4, released as 1.44.0. Copied as
    path data rather than .svg files so importing one needs no Vite plugin.
-   None of the nine are on the Feather-derived list in Lucide's LICENSE, so
+   None of the ten are on the Feather-derived list in Lucide's LICENSE, so
    all of them are ISC, which the ISC requires reproducing here:
 
    ISC License
@@ -22,10 +22,9 @@
 import type { ReactNode } from 'react'
 
 // Lifted verbatim from the SVGs, so an update is a re-fetch and not a
-// reconciliation. notebook-pen, file-text, calendar-clock, brush and
-// playing-cards-fan are deliberately unused: collegebooks, deadlines,
-// drawing and flashcards are later phases, and a set chosen at once looks
-// like a set where one accumulated over three pull requests does not.
+// reconciliation. calendar-clock, brush, playing-cards-fan and sun are unused
+// for now and kept: a set chosen at once looks like a set, where one
+// accumulated over several pull requests does not.
 const icons = {
   'archive': (
     <>
@@ -65,6 +64,12 @@ const icons = {
       <path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z" />
       <path d="M22 10v6" />
       <path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5" />
+    </>
+  ),
+  'house': (
+    <>
+      <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+      <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     </>
   ),
   'inbox': (

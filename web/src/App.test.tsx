@@ -78,6 +78,20 @@ function visibility(state: 'visible' | 'hidden') {
 // triggers started without advancing the clock the debounce reads.
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
 
+// Home lists the classes and the recent notes as well, so a class is clicked
+// in the rail, where its name is unambiguous. Either language's name.
+const inRail = async (name: string | RegExp) =>
+  within(
+    await screen.findByRole('navigation', { name: /^(Classes|Predmety)$/ }),
+  ).findByRole('button', { name })
+
+// The greeting is Home's heading, and which one depends on the hour.
+const home = () =>
+  screen.findByRole('heading', {
+    level: 1,
+    name: /^Good (morning|afternoon|evening)$/,
+  })
+
 // jsdom has no ResizeObserver, and an editor that measures itself on mount
 // throws without one. Nothing here tests the editor; this only keeps it from
 // throwing when the new note selects itself.
@@ -118,12 +132,11 @@ describe('App', () => {
 
   it('writes a row to IndexedDB when a note is created through the UI', async () => {
     render(<App />)
-    // With no classes and no notes this is the sentence about what a class
-    // is, not the note-list empty state.
-    await screen.findByText('A class is where the notes for one subject live.')
+    // Home has no note list to hold a "New note" row, so the gesture is n.
+    await home()
     expect(await countNotes()).toBe(0)
 
-    fireEvent.click(screen.getByRole('button', { name: 'New note' }))
+    fireEvent.keyDown(window, { key: 'n' })
 
     await waitFor(async () => expect(await countNotes()).toBe(1))
     const [note] = await listNotes()
@@ -140,6 +153,8 @@ describe('App', () => {
     await createNote({ title: 'Diskrétna matematika', bodyMd: '# množiny' })
     await createNote({ title: 'Lineárna algebra', bodyMd: 'vektory' })
     render(<App />)
+    // Search belongs to a shelf and Home has none. Both notes are unfiled.
+    fireEvent.click(await inRail(/^Unfiled/))
     await waitFor(() => expect(noteRows()).toHaveLength(2))
 
     const box = screen.getByRole('searchbox', { name: 'Search notes' })
@@ -267,26 +282,27 @@ describe('App remembering the open note', () => {
     expect(screen.queryByRole('button', { name: /^Diskrétna/ })).toBeNull()
   })
 
-  it('falls back to the empty state when the remembered note was deleted', async () => {
+  it('falls back to Home when the remembered note was deleted', async () => {
     const note = await createNote({ title: 'Zmazaná', bodyMd: 'text' })
     await deleteNote(note.id)
     await db.meta.put({ key: 'lastNoteId', value: note.id })
 
     render(<App />)
 
-    await screen.findByText('A class is where the notes for one subject live.')
+    await home()
+    await settle()
+    expect(editor()).toBeNull()
   })
 
-  it('falls back to the empty state when the remembered id is not in the database', async () => {
+  it('falls back to Home when the remembered id is not in the database', async () => {
     await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
     await db.meta.put({ key: 'lastNoteId', value: 'no-such-note' })
 
     render(<App />)
 
-    // The grid, not an editor: a remembered id that names nothing may not
-    // open anything.
-    await waitFor(() => expect(noteRows()).toHaveLength(1))
-    screen.getByRole('button', { name: /^Diskrétna/ })
+    // Home, not an editor: a remembered id that names nothing may not open
+    // anything.
+    await screen.findByRole('button', { name: /^Diskrétna/ })
     expect(editor()).toBeNull()
   })
 })
@@ -333,7 +349,7 @@ describe('App auth wall', () => {
     render(<App />)
 
     await screen.findByRole('button', { name: 'Sign in' })
-    expect(screen.queryByRole('button', { name: 'New note' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Classes' })).toBeNull()
   })
 
   it('renders the app after signing in with valid credentials', async () => {
@@ -343,7 +359,7 @@ describe('App auth wall', () => {
 
     await signIn()
 
-    await screen.findByRole('button', { name: 'New note' })
+    await home()
     expect(login).toHaveBeenCalledWith('jozef@example.sk', 'hunter2hunter2')
   })
 
@@ -356,7 +372,7 @@ describe('App auth wall', () => {
 
     render(<App />)
 
-    await screen.findByRole('button', { name: 'New note' })
+    await home()
     expect(screen.queryByLabelText('Password')).toBeNull()
   })
 
@@ -374,7 +390,7 @@ describe('App auth wall', () => {
     await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
     await db.meta.put({ key: 'syncCursor', value: 42 })
     render(<App />)
-    await screen.findByRole('button', { name: 'New note' })
+    await home()
 
     fireEvent.click(screen.getByRole('button', { name: /^Sync/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
@@ -391,7 +407,7 @@ describe('App auth wall', () => {
     await createNote({ title: 'Diskrétna matematika', bodyMd: '# Množiny' })
     await createNote({ title: 'Lineárna algebra', bodyMd: 'vektory' })
     render(<App />)
-    await screen.findByRole('button', { name: 'New note' })
+    await home()
 
     fireEvent.click(screen.getByRole('button', { name: /^Sync/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
@@ -407,7 +423,7 @@ describe('App auth wall', () => {
     expect(await db.notes.count()).toBe(0)
 
     render(<App />)
-    await screen.findByRole('button', { name: 'New note' })
+    await home()
 
     fireEvent.click(screen.getByRole('button', { name: /^Sync/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
@@ -438,13 +454,6 @@ describe('App auth wall', () => {
   })
 })
 
-// Local midnight is the boundary Today is drawn at, so the fixtures are
-// stamped either side of it rather than at an age in hours: at 00:30 a note
-// two hours old is yesterday's, and a test that assumed otherwise would fail
-// only for whoever runs it at the wrong time of night.
-const startOfToday = () => new Date(new Date().setHours(0, 0, 0, 0)).getTime()
-const afterMidnight = () => new Date(startOfToday() + 1000).toISOString()
-const beforeMidnight = () => new Date(startOfToday() - 1000).toISOString()
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
 
 // updatedAt is written directly because createNote stamps now(), and the
@@ -511,7 +520,7 @@ describe('App class rail', () => {
     await waitFor(() => expect(railRows()).toHaveLength(5))
 
     expect(railRows()).toEqual([
-      'Today',
+      'Home',
       'Diskrétna matematika2h ago',
       'Lineárna algebra2d ago',
       'Analýza3w ago',
@@ -524,16 +533,13 @@ describe('App class rail', () => {
   it('filters the note list to the class that was clicked', async () => {
     await seedClass(
       'Diskrétna matematika',
-      [['Množiny', afterMidnight()]],
+      [['Množiny', ago(60_000)]],
       '1-AIN-121',
     )
-    await seedClass('Lineárna algebra', [['Vektory', afterMidnight()]])
+    await seedClass('Lineárna algebra', [['Vektory', ago(60_000)]])
     render(<App />)
-    await waitFor(() => expect(noteRows()).toHaveLength(2))
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
 
     await waitFor(() => expect(noteRows()).toHaveLength(1))
     screen.getByRole('button', { name: /^Množiny/ })
@@ -543,24 +549,21 @@ describe('App class rail', () => {
     screen.getByText('1-AIN-121')
   })
 
-  it('shows Today across classes and nothing from before midnight', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
-    await seedClass('Lineárna algebra', [
-      ['Vektory', afterMidnight()],
-      ['Staré vektory', beforeMidnight()],
-    ])
+  it('opens on Home on a cold start with no remembered class', async () => {
+    await seedClass('Diskrétna matematika', [['Množiny', ago(2 * 3_600_000)]])
     render(<App />)
 
-    await waitFor(() => expect(noteRows()).toHaveLength(2))
-
-    screen.getByRole('heading', { name: 'Today' })
-    screen.getByRole('button', { name: /^Množiny/ })
-    screen.getByRole('button', { name: /^Vektory/ })
-    expect(screen.queryByRole('button', { name: /^Staré vektory/ })).toBeNull()
+    await home()
+    const row = await inRail('Home')
+    expect(row.getAttribute('aria-current')).toBe('true')
+    // Still Home once the restore has read back nothing.
+    await settle()
+    expect(row.getAttribute('aria-current')).toBe('true')
+    expect(screen.queryByRole('heading', { name: 'Diskrétna matematika' })).toBeNull()
   })
 
   it('hides Unfiled at zero and shows it with its count', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     const first = render(<App />)
     await waitFor(() => expect(railRows()).toHaveLength(2))
     expect(
@@ -582,9 +585,9 @@ describe('App class rail', () => {
   })
 
   it('marks every kind of rail row with a decorative icon', async () => {
-    const old = await seedClass('Fyzika', [['Sila', beforeMidnight()]])
+    const old = await seedClass('Fyzika', [['Sila', ago(2 * 86_400_000)]])
     await archiveClass(old.id)
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     await createNote({ title: 'Nezaradená' })
     render(<App />)
 
@@ -596,7 +599,7 @@ describe('App class rail', () => {
       within(rail).getByRole('button', { name }).querySelector('.rail-icon')
         ?.innerHTML
 
-    const marks = ['Today', /^Unfiled/, /^Diskrétna/, 'Archived'].map(icon)
+    const marks = ['Home', /^Unfiled/, /^Diskrétna/, 'Archived'].map(icon)
     expect(marks.every((mark) => mark !== undefined && mark !== '')).toBe(true)
     // Four kinds of row, four different icons. Presence alone would pass with
     // the same one wired to all of them.
@@ -607,8 +610,8 @@ describe('App class rail', () => {
     // The icons are aria-hidden, so the names the rest of this suite matches
     // on are the names they were.
     expect(
-      within(rail).getByRole('button', { name: 'Today' }).textContent,
-    ).toBe('Today')
+      within(rail).getByRole('button', { name: 'Home' }).textContent,
+    ).toBe('Home')
     expect(
       within(rail).getByRole('button', { name: /^Unfiled/ }).textContent,
     ).toBe('Unfiled1')
@@ -617,7 +620,7 @@ describe('App class rail', () => {
   it('creates a class and its general notebook from the inline row, and selects it', async () => {
     render(<App />)
 
-    fireEvent.click(await screen.findByRole('button', { name: '+ New class' }))
+    fireEvent.click(await inRail('+ New class'))
     const field = screen.getByRole('textbox', { name: 'Class name' })
     fireEvent.change(field, { target: { value: 'Diskrétna matematika' } })
     fireEvent.submit(field.closest('form')!)
@@ -638,7 +641,7 @@ describe('App class rail', () => {
 
   it('cancels the inline row on Escape and does nothing with an empty name', async () => {
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: '+ New class' }))
+    fireEvent.click(await inRail('+ New class'))
     const field = screen.getByRole('textbox', { name: 'Class name' })
 
     fireEvent.submit(field.closest('form')!)
@@ -655,12 +658,10 @@ describe('App class rail', () => {
 
   it('creates a note in the selected class when n is pressed', async () => {
     const discrete = await seedClass('Diskrétna matematika', [
-      ['Množiny', afterMidnight()],
+      ['Množiny', ago(60_000)],
     ])
     render(<App />)
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
     await waitFor(() => expect(noteRows()).toHaveLength(1))
 
     fireEvent.keyDown(window, { key: 'n' })
@@ -679,8 +680,9 @@ describe('App class rail', () => {
   })
 
   it('does not create a note when n is typed inside the editor', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     render(<App />)
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
     fireEvent.click(await screen.findByRole('button', { name: /^Množiny/ }))
     const content = await waitFor(() => {
       const found = editor()
@@ -707,13 +709,13 @@ describe('App class rail', () => {
     expect(await countNotes()).toBe(1)
   })
 
-  it('writes into the last class written in when Today is selected', async () => {
+  it('writes into the last class written in when Home is selected', async () => {
     const discrete = await seedClass('Diskrétna matematika', [
-      ['Množiny', afterMidnight()],
+      ['Množiny', ago(60_000)],
     ])
     await writeLastWrittenClassId(discrete.id)
     render(<App />)
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
 
     fireEvent.keyDown(window, { key: 'n' })
 
@@ -725,7 +727,7 @@ describe('App class rail', () => {
 
   it('writes an unfiled note when no class has been written in yet', async () => {
     render(<App />)
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
 
     fireEvent.keyDown(window, { key: 'n' })
 
@@ -734,11 +736,11 @@ describe('App class rail', () => {
 
   it('restores the remembered class on mount', async () => {
     const discrete = await seedClass('Diskrétna matematika', [
-      // Before midnight, so a list showing it proves the class was restored
-      // and not that Today happens to contain the same note.
-      ['Množiny', beforeMidnight()],
+      // A list showing this and not Vektory proves the class was restored,
+      // and not that Home's recents, which hold both, are on screen.
+      ['Množiny', ago(2 * 86_400_000)],
     ])
-    await seedClass('Lineárna algebra', [['Vektory', afterMidnight()]])
+    await seedClass('Lineárna algebra', [['Vektory', ago(60_000)]])
     await writeLastClassId(discrete.id)
 
     render(<App />)
@@ -748,26 +750,26 @@ describe('App class rail', () => {
     expect(screen.queryByRole('button', { name: /^Vektory/ })).toBeNull()
   })
 
-  it('falls back to Today when the remembered class was deleted', async () => {
+  it('falls back to Home when the remembered class was deleted', async () => {
     const gone = await seedClass('Zmazaný')
     await writeLastClassId(gone.id)
     await deleteClass(gone.id)
-    await seedClass('Lineárna algebra', [['Vektory', afterMidnight()]])
+    await seedClass('Lineárna algebra', [['Vektory', ago(60_000)]])
 
     render(<App />)
 
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
     await screen.findByRole('button', { name: /^Vektory/ })
   })
 
-  it('falls back to Today when the remembered class was archived', async () => {
-    const old = await seedClass('Fyzika', [['Sila', beforeMidnight()]])
+  it('falls back to Home when the remembered class was archived', async () => {
+    const old = await seedClass('Fyzika', [['Sila', ago(2 * 86_400_000)]])
     await writeLastClassId(old.id)
     await archiveClass(old.id)
 
     render(<App />)
 
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
     // Archived is not deleted: the class stays reachable from the rail.
     const rail = screen.getByRole('navigation', { name: 'Classes' })
     await waitFor(() => within(rail).getByRole('button', { name: 'Archived' }))
@@ -778,7 +780,7 @@ describe('App class rail', () => {
   })
 
   it('opens the rail as a drawer and closes it on Escape and on a choice', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     render(<App />)
     const toggle = await screen.findByRole('button', { name: 'Classes' })
     const app = document.querySelector('.app')!
@@ -791,15 +793,16 @@ describe('App class rail', () => {
     expect(app.getAttribute('data-rail-open')).toBe('false')
 
     fireEvent.click(toggle)
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
 
     expect(app.getAttribute('data-rail-open')).toBe('false')
   })
 
   it('says what a class is when there are none, and offers the same row', async () => {
+    // Unfiled is the one shelf there is to stand on without a class.
+    await createNote({ title: 'Nezaradená' })
     render(<App />)
+    fireEvent.click(await inRail(/^Unfiled/))
 
     await screen.findByText('A class is where the notes for one subject live.')
     fireEvent.click(
@@ -809,15 +812,11 @@ describe('App class rail', () => {
     screen.getByRole('textbox', { name: 'Class name' })
   })
 
-  it('invites a note in a class that has none, and stays quiet in an empty Today', async () => {
+  it('invites a note in a class that has none', async () => {
     await seedClass('Diskrétna matematika')
     render(<App />)
 
-    await screen.findByText('Nothing yet today')
-
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
 
     // The invitation is the first card in the grid, not a line of prose.
     await waitFor(() => expect(noteRows()).toHaveLength(0))
@@ -851,15 +850,13 @@ describe('App two panes', () => {
     // Three weeks written in, because a strip is absent below that: one mark
     // among thirteen blanks is not a record of a semester.
     await seedClass('Diskrétna matematika', [
-      ['Množiny', afterMidnight()],
+      ['Množiny', ago(60_000)],
       ['Relácie', ago(9 * 86_400_000)],
       ['Funkcie', ago(20 * 86_400_000)],
     ])
     render(<App />)
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
 
     await screen.findByRole('heading', { name: 'Diskrétna matematika' })
     // The strip is the reason the page exists, so its absence here would
@@ -871,11 +868,9 @@ describe('App two panes', () => {
   })
 
   it('opens the editor on a card and returns to the class page on Escape', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     render(<App />)
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
     await screen.findByRole('heading', { name: 'Diskrétna matematika' })
 
     fireEvent.click(screen.getByRole('button', { name: /^Množiny/ }))
@@ -893,8 +888,9 @@ describe('App two panes', () => {
   })
 
   it('returns to the class page with the back button', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     render(<App />)
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
     fireEvent.click(await screen.findByRole('button', { name: /^Množiny/ }))
     await waitFor(() => expect(editor()).not.toBeNull())
 
@@ -908,7 +904,7 @@ describe('App two panes', () => {
     await seedClass('Zoológia')
     render(<App />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Zoológia' }))
+    fireEvent.click(await inRail('Zoológia'))
 
     await screen.findByRole('heading', { name: 'Zoológia' })
     expect(screen.queryByRole('list', { name: 'Weeks written in' })).toBeNull()
@@ -951,23 +947,21 @@ describe('App two panes', () => {
     )
   })
 
-  it('creates a note with n from the class page and from Today', async () => {
+  it('creates a note with n from the class page and from Home', async () => {
     const discrete = await seedClass('Diskrétna matematika', [
-      ['Množiny', afterMidnight()],
+      ['Množiny', ago(60_000)],
     ])
     render(<App />)
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
 
-    // From Today, which is not a place to write. Nothing has been written in
+    // From Home, which is not a place to write. Nothing has been written in
     // yet, so the note is unfiled — and it still opens.
     fireEvent.keyDown(window, { key: 'n' })
     await waitFor(async () => expect(await listNotes(null)).toHaveLength(1))
     await waitFor(() => expect(editor()).not.toBeNull())
 
     fireEvent.keyDown(window, { key: 'Escape' })
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
     await screen.findByRole('heading', { name: 'Diskrétna matematika' })
 
     fireEvent.keyDown(window, { key: 'n' })
@@ -978,7 +972,7 @@ describe('App two panes', () => {
     )
     // And from the rail, which is where the third state is.
     fireEvent.keyDown(window, { key: 'Escape' })
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Today' }), {
+    fireEvent.keyDown(await inRail('Home'), {
       key: 'n',
     })
     await waitFor(async () =>
@@ -991,15 +985,13 @@ describe('App two panes', () => {
     await seedClass('Diskrétna matematika', [['Množiny', ago(5 * 60_000)]])
     render(<App />)
 
-    fireEvent.click(await screen.findByRole('button', { name: /^Analýza/ }))
+    fireEvent.click(await inRail(/^Analýza/))
 
     // A duration, not a timestamp: this is the line that gets a neglected
     // class opened.
     await screen.findByText('Nothing here for 3 weeks')
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
     await screen.findByRole('heading', { name: 'Diskrétna matematika' })
 
     // Five minutes is not a gap worth naming, and "nothing here for 0 days"
@@ -1013,9 +1005,7 @@ describe('App two panes', () => {
     await seedClass('Diskrétna matematika', [['Množiny', ago(3 * 86_400_000)]])
     render(<App />)
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
 
     // "pred" takes the instrumental, so the number and its unit have to come
     // from the formatter that knows that: pred 3 dňami, never pred 3 dni.
@@ -1023,11 +1013,9 @@ describe('App two panes', () => {
   })
 
   it('deletes a note from its row, once', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     render(<App />)
-    fireEvent.click(
-      await screen.findByRole('button', { name: /^Diskrétna matematika/ }),
-    )
+    fireEvent.click(await inRail(/^Diskrétna matematika/))
     await waitFor(() => expect(noteRows()).toHaveLength(1))
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete Množiny' }))
@@ -1060,7 +1048,7 @@ describe('App class controls', () => {
   })
 
   const openClass = async (name = 'Diskrétna matematika') => {
-    fireEvent.click(await screen.findByRole('button', { name: RegExp(`^${name}`) }))
+    fireEvent.click(await inRail(RegExp(`^${name}`)))
     return screen.findByRole('heading', { name })
   }
 
@@ -1071,7 +1059,7 @@ describe('App class controls', () => {
     )
 
   it('renames the class inline from its heading', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     render(<App />)
     const heading = await openClass()
 
@@ -1185,15 +1173,15 @@ describe('App class controls', () => {
     )
   })
 
-  it('archives after confirming and returns to Today', async () => {
-    await seedClass('Diskrétna matematika', [['Množiny', afterMidnight()]])
+  it('archives after confirming and returns to Home', async () => {
+    await seedClass('Diskrétna matematika', [['Množiny', ago(60_000)]])
     render(<App />)
     await openClass()
 
     fireEvent.click(screen.getByRole('button', { name: 'Class actions' }))
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
 
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
     expect(window.confirm).toHaveBeenCalled()
     await waitFor(async () =>
       expect((await db.classes.toArray())[0]!.archivedAt).not.toBeNull(),
@@ -1204,7 +1192,7 @@ describe('App class controls', () => {
 
   it('deletes the class, its notebooks and its notes, counted at the moment of asking', async () => {
     const discrete = await seedClass('Diskrétna matematika', [
-      ['Množiny', afterMidnight()],
+      ['Množiny', ago(60_000)],
     ])
     render(<App />)
     await openClass()
@@ -1224,7 +1212,7 @@ describe('App class controls', () => {
       'Delete Diskrétna matematika and its 2 notes? This cannot be undone.',
     )
 
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
     // All three tables, soft and dirty: notes left behind would be invisible
     // here and would come back on the next pull.
     await waitFor(async () => {
@@ -1326,7 +1314,7 @@ describe('App class controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Class actions' }))
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
 
-    await screen.findByRole('heading', { name: 'Today' })
+    await home()
     await waitFor(async () => {
       expect((await db.deadlines.get(mine.id))!.deletedAt).not.toBeNull()
     })
@@ -1368,7 +1356,7 @@ describe('App table of contents', () => {
   // before the read behind it lands, and until then the rows on screen still
   // belong to the shelf that was open before.
   const open = async (rows: number, name = 'Diskrétna matematika') => {
-    fireEvent.click(await screen.findByRole('button', { name: RegExp(`^${name}`) }))
+    fireEvent.click(await inRail(RegExp(`^${name}`)))
     await screen.findByRole('heading', { name })
     return waitFor(() => {
       const found = noteRows()
@@ -1402,7 +1390,7 @@ describe('App table of contents', () => {
       cls.id,
       'Množiny a relácie',
       '# Množiny a relácie\n## Definícia množiny\ntext\n## Operácie\n### Karteziánsky súčin',
-      afterMidnight(),
+      ago(60_000),
     )
     render(<App />)
 
@@ -1421,7 +1409,7 @@ describe('App table of contents', () => {
       cls.id,
       'Organizačné',
       'Organizačné\nStretnutie v utorok.',
-      afterMidnight(),
+      ago(60_000),
     )
     render(<App />)
 
@@ -1435,7 +1423,7 @@ describe('App table of contents', () => {
   it('counts the headings past the sixth', async () => {
     const cls = await seedClass('Diskrétna matematika')
     const body = ['Množiny', ...Array.from({ length: 9 }, (_, n) => `## H${n + 1}`)]
-    await write(cls.id, 'Množiny', body.join('\n'), afterMidnight())
+    await write(cls.id, 'Množiny', body.join('\n'), ago(60_000))
     render(<App />)
 
     const [row] = await open(1)
@@ -1447,7 +1435,7 @@ describe('App table of contents', () => {
 
   it('creates a note from the row at the bottom of the list', async () => {
     const cls = await seedClass('Diskrétna matematika')
-    await write(cls.id, 'Množiny', 'Množiny', afterMidnight())
+    await write(cls.id, 'Množiny', 'Množiny', ago(60_000))
     render(<App />)
     await open(1)
 
@@ -1466,7 +1454,7 @@ describe('App table of contents', () => {
 
   it('deletes a note from its row after confirming', async () => {
     const cls = await seedClass('Diskrétna matematika')
-    await write(cls.id, 'Množiny', 'Množiny', afterMidnight())
+    await write(cls.id, 'Množiny', 'Množiny', ago(60_000))
     render(<App />)
     await open(1)
 
@@ -1482,7 +1470,7 @@ describe('App collegebooks', () => {
   // Not the `open` two blocks up: that one is local to its describe, and the
   // name resolves to window.open out here, which silently does nothing.
   const openClass = async (name: string) => {
-    fireEvent.click(await screen.findByRole('button', { name: RegExp(`^${name}`) }))
+    fireEvent.click(await inRail(RegExp(`^${name}`)))
     return screen.findByRole('heading', { name })
   }
 
@@ -1511,7 +1499,7 @@ describe('App collegebooks', () => {
   // that has to survive here.
   it('shows collegebooks as cards and notes as a list, in two sections', async () => {
     const cls = await seedClass('Diskrétna matematika', [
-      ['Množiny', afterMidnight()],
+      ['Množiny', ago(60_000)],
     ])
     const book = await createCollegebook('Prednášky', cls.id)
     await createPage(book.id)
@@ -1801,5 +1789,117 @@ describe('App deadline topics', () => {
 
     await screen.findByText('The note with “Operácie” has been deleted.')
     expect(editor()).toBeNull()
+  })
+})
+
+describe('App home', () => {
+  const inDays = (days: number) =>
+    `${new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`
+
+  // jsdom has no scrollIntoView. The element it is called on is where the book
+  // landed.
+  const scroll = vi.fn()
+
+  beforeEach(async () => {
+    await db.notes.clear()
+    await db.classes.clear()
+    await db.notebooks.clear()
+    await db.deadlines.clear()
+    await db.meta.clear()
+    await i18n.changeLanguage('en')
+    vi.mocked(me).mockResolvedValue(account)
+    vi.mocked(sync).mockImplementation(idle)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))),
+    )
+    scroll.mockClear()
+    Element.prototype.scrollIntoView = scroll
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  const recents = () =>
+    screen.findByRole('region', { name: 'Pick up where you left off' })
+
+  it('opens a recent note or page itself, and Back returns to Home', async () => {
+    const cls = await seedClass('Diskrétna matematika', [['Množiny', ago(3_600_000)]])
+    const book = await createCollegebook('Prednášky', cls.id)
+    const [first] = await listPages(book.id)
+    const second = await createPage(book.id)
+    await db.notes.update(first!.id, { updatedAt: ago(5 * 3_600_000) })
+    await db.notes.update(second.id, { updatedAt: ago(2 * 3_600_000) })
+    render(<App />)
+
+    fireEvent.click(
+      await within(await recents()).findByRole('button', { name: /^Množiny/ }),
+    )
+
+    await waitFor(() => expect(editor()).not.toBeNull())
+    // Not by way of its class: the class page was never on screen, and the
+    // way back is to where the click came from.
+    expect(screen.queryByRole('heading', { name: 'Diskrétna matematika' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Home' }))
+
+    fireEvent.click(
+      await within(await recents()).findByRole('button', { name: /^Prednášky · p. 2/ }),
+    )
+
+    await waitFor(() => {
+      const landed = scroll.mock.contexts.at(-1) as Element | undefined
+      expect(landed?.getAttribute('data-page')).toBe(second.id)
+    })
+    screen.getByRole('button', { name: 'Back to Home' })
+  })
+
+  it('shows a deadline that arrived in a pull, without a reload', async () => {
+    const cls = await seedClass('Diskrétna matematika')
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      render(<App />)
+      await screen.findByRole('region', { name: 'Upcoming' })
+      expect(screen.queryByText('Zápočet')).toBeNull()
+
+      // What pullRemoteChanges does with another device's row: written, clean.
+      vi.mocked(sync).mockImplementation(async () => {
+        const row = await createDeadline({
+          title: 'Zápočet',
+          dueAt: inDays(10),
+          classId: cls.id,
+        })
+        await db.deadlines.update(row.id, { dirty: false })
+        return {
+          push: { pushed: 0, conflicted: 0, forbidden: 0, failed: 0 },
+          pull: { applied: 1, skipped: 0, pages: 1 },
+          changed: true,
+        }
+      })
+      vi.advanceTimersByTime(2_100)
+      window.dispatchEvent(new Event('focus'))
+
+      await waitFor(() =>
+        expect(
+          screen.getByRole('region', { name: 'Upcoming' }).textContent,
+        ).toContain('Zápočet'),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('creates a class from Home and opens it, as the rail does', async () => {
+    render(<App />)
+    const classes = await screen.findByRole('region', { name: 'Classes' })
+
+    fireEvent.click(within(classes).getByRole('button', { name: '+ New class' }))
+    const field = within(classes).getByRole('textbox', { name: 'Class name' })
+    fireEvent.change(field, { target: { value: 'Diskrétna matematika' } })
+    fireEvent.submit(field.closest('form')!)
+
+    await screen.findByRole('heading', { name: 'Diskrétna matematika' })
+    expect(await db.classes.count()).toBe(1)
   })
 })

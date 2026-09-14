@@ -241,7 +241,7 @@ export async function deleteClassCascade(id: string): Promise<void> {
 }
 
 // Two keys, not one. The selected class and the class to write in are the
-// same id most of the time and must not be: selecting Today may not lose
+// same id most of the time and must not be: selecting Home may not lose
 // where `n` puts a note.
 const LAST_CLASS = 'lastClassId'
 const LAST_WRITTEN_CLASS = 'lastWrittenClassId'

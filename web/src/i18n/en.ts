@@ -49,10 +49,23 @@ export const en = {
   // once. Renameable afterwards, so this is a starting point, not a name.
   'notebooks.general': 'General',
   'rail.label': 'Classes',
-  // A pseudo-class, and first, because most of the time what you want is
-  // something from the last few hours.
-  'rail.today': 'Today',
-  'rail.todayEmpty': 'Nothing yet today',
+  // First, and where the app opens: what is coming, where you were, and what
+  // you have.
+  'rail.home': 'Home',
+  // The one warm thing on a page of information.
+  'home.morning': 'Good morning',
+  'home.afternoon': 'Good afternoon',
+  'home.evening': 'Good evening',
+  'home.semester': 'Semester',
+  'home.allSemesters': 'All semesters',
+  'home.recent': 'Pick up where you left off',
+  'home.classes': 'Classes',
+  'home.upcoming': 'Upcoming',
+  // "Page 3" alone means nothing, so a page is named by its book.
+  'home.page': '{{book}} · p. {{number}}',
+  'home.more_one': '+{{count}} more',
+  'home.more_other': '+{{count}} more',
+  'home.none': '—',
   'rail.unfiled': 'Unfiled',
   'rail.archived': 'Archived',
   'rail.newClass': '+ New class',

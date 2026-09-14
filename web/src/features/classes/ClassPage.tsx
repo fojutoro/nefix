@@ -33,7 +33,8 @@ export type BookCard = {
 }
 
 type Props = {
-  kind: Selection['kind']
+  // Home is its own page and never reaches this one.
+  kind: Exclude<Selection['kind'], 'home'>
   // Null unless kind is 'class'.
   classId: string | null
   heading: string
@@ -48,7 +49,7 @@ type Props = {
   // The shelf itself, which the strip and the state line are about: neither
   // should change shape because somebody is typing in the search box.
   all: Note[]
-  // The class's deadlines, soonest first. Empty on Today and Unfiled.
+  // The class's deadlines, soonest first. Empty on Unfiled.
   deadlines: Deadline[]
   query: string
   toggle: ReactNode
@@ -141,9 +142,8 @@ export default function ClassPage({
   // is what gets skimmed past.
   let state: string | null
   if (searching) state = t('search.matches', { count: notes.length })
-  else if (all.length === 0) {
-    state = kind === 'today' ? t('rail.todayEmpty') : t('state.none')
-  } else {
+  else if (all.length === 0) state = t('state.none')
+  else {
     const newest = all.reduce(
       (latest, note) => (note.updatedAt > latest ? note.updatedAt : latest),
       all[0]!.updatedAt,
@@ -174,8 +174,8 @@ export default function ClassPage({
       {toggle}
       <header className="page-head">
         <div className="page-title">
-          {/* A class is renameable in place; Today and Unfiled are not
-              classes and have nothing to rename. */}
+          {/* A class is renameable in place; Unfiled is not a class and has
+              nothing to rename. */}
           <h1>
             {kind === 'class' ? (
               <InlineText
@@ -214,8 +214,7 @@ export default function ClassPage({
       {/* Above the strip, which records what was done: this is the one thing
           on the page asking for something. */}
       <NextDeadline deadlines={deadlines} now={now} onOpenTopic={onOpenTopic} />
-      {/* Only a class has weeks. Today is every class at once, and Unfiled is
-          not a course. */}
+      {/* Only a class has weeks. Unfiled is not a course. */}
       {kind === 'class' && <ActivityStrip notes={all} />}
       {notice}
       {/* Cards rather than rows, because a collegebook is a container you

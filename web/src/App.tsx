@@ -57,12 +57,13 @@ import ClassRail from './features/classes/ClassRail.tsx'
 import RailHandle from './features/classes/RailHandle.tsx'
 import {
   generalNotebookOf,
+  HOME,
   keyOf,
   scopeOf,
-  TODAY,
   type Selection,
 } from './features/classes/selection.ts'
 import { readSettings, type BookSettings } from './db/settings.ts'
+import Home from './features/home/Home.tsx'
 import Collegebook from './features/notes/Collegebook.tsx'
 import SyncDot from './features/sync/SyncDot.tsx'
 import Editor from './features/notes/Editor.tsx'
@@ -118,7 +119,7 @@ function Workspace({
   const [archived, setArchived] = useState<Class[]>([])
   const [notebooks, setNotebooks] = useState<Notebook[]>([])
   const [unfiled, setUnfiled] = useState(0)
-  const [chosen, setChosen] = useState<Selection>(TODAY)
+  const [chosen, setChosen] = useState<Selection>(HOME)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // The collegebook on screen, and its pages. A book is opened rather than
   // selected: it replaces the class page the way a note does.
@@ -141,10 +142,11 @@ function Workspace({
   } | null>(null)
   // Where a topic chip took the reader, kept while that note is open. Whether
   // the heading is missing is decided from the body before navigating, so the
-  // editor is never sent looking for a heading that is not there.
+  // editor is never sent looking for a heading that is not there. No heading
+  // is a page opened from Home, which the book scrolls to itself.
   const [jump, setJump] = useState<{
     noteId: string
-    heading: string
+    heading: string | null
     missing: boolean
   } | null>(null)
   // The heading of a topic whose note was deleted, said on the page instead
@@ -174,14 +176,14 @@ function Workspace({
 
   // A class can leave while it is on screen: a pull can deliver its deletion
   // from another device. Answered here rather than corrected in an effect, so
-  // a class that is not there reads as Today for the whole of one render.
+  // a class that is not there reads as Home for the whole of one render.
   // Unloaded classes are taken on trust, or a restored selection would flash
-  // Today on the way in.
+  // Home on the way in.
   const reachable =
     chosen.kind !== 'class' ||
     classes === null ||
     [...classes, ...archived].some((row) => row.id === chosen.classId)
-  const selection = reachable ? chosen : TODAY
+  const selection = reachable ? chosen : HOME
 
   // Live, because the tick in the list and the modal both write to the store
   // and neither knows that this page is showing the result.
@@ -211,10 +213,10 @@ function Workspace({
         // business pulling the user off a note they just opened.
       setSelectedId((current) => current ?? noteId)
       // Both reads validate what they hand back, so a deleted or archived
-      // class arrives as null, and null is Today.
+      // class arrives as null, and null is Home.
       if (classId !== null) {
         setChosen((current) =>
-          current.kind === 'today' ? { kind: 'class', classId } : current,
+          current.kind === 'home' ? { kind: 'class', classId } : current,
         )
       }
     })
@@ -253,8 +255,8 @@ function Workspace({
   // reports that the notebook row does not carry: how many pages it has and
   // when it was last written in.
   const refreshBooks = useCallback(() => {
-    // Only a class has collegebooks. Today is every class at once and Unfiled
-    // is not a course, so neither reads and neither shows any.
+    // Only a class has collegebooks. Home reads its own and Unfiled is not a
+    // course, so neither reads here.
     if (selection.kind !== 'class') return
     const classId = selection.classId
     return listCollegebooks(classId)
@@ -446,7 +448,7 @@ function Workspace({
       return
     }
     // A selected class means its general notebook, which the user never chose
-    // and never sees. Today and Unfiled are not places to write, so the note
+    // and never sees. Home and Unfiled are not places to write, so the note
     // goes where the last one went, and with nothing written yet it is
     // unfiled, which is a note and not a prompt to set up a class first.
     const classId =
@@ -491,7 +493,7 @@ function Workspace({
     if (!window.confirm(t('class.archiveConfirm', { name: shelf.name }))) return
     await archiveClass(selection.classId)
     // Its notes are untouched and reachable under Archived.
-    setChosen(TODAY)
+    setChosen(HOME)
     await refreshRail()
   }
 
@@ -526,7 +528,7 @@ function Workspace({
               })
     if (!window.confirm(question)) return
     await deleteClassCascade(selection.classId)
-    setChosen(TODAY)
+    setChosen(HOME)
     await Promise.all([refresh(), refreshRail()])
   }
 
@@ -534,7 +536,7 @@ function Workspace({
     const created = await createClass({ name })
     // Before the selection, because the fallback above reads the loaded rail
     // to decide whether a selected class exists, and a class it has not seen
-    // yet is one it would send back to Today.
+    // yet is one it would send back to Home.
     await refreshRail()
     setCreating(false)
     setRailOpen(false)
@@ -613,6 +615,26 @@ function Workspace({
     setSelectedId(note.id)
   }
 
+  const openNote = (id: string) => {
+    setFocusEditor(false)
+    setSelectedId(id)
+  }
+
+  const openPage = (bookId: string, noteId: string) => {
+    setFocusEditor(false)
+    setJump({ noteId, heading: null, missing: false })
+    setOpenBookId(bookId)
+  }
+
+  const choose = (next: Selection) => {
+    setRailOpen(false)
+    // The search belongs to the shelf it was typed on, and the box is rebuilt
+    // with the page.
+    setQuery('')
+    setGone(null)
+    setChosen(next)
+  }
+
   // Held in a ref so the shortcut is registered once. Reading `create`
   // directly would add and remove a window listener on every keystroke in the
   // search box.
@@ -687,7 +709,7 @@ function Workspace({
   const heading =
     selection.kind === 'class'
       ? shelf?.name ?? ''
-      : t(selection.kind === 'today' ? 'rail.today' : 'rail.unfiled')
+      : t(selection.kind === 'home' ? 'rail.home' : 'rail.unfiled')
 
   const startFirstClass = () => {
     setRailOpen(true)
@@ -777,6 +799,16 @@ function Workspace({
         />
       </div>
     )
+  } else if (selection.kind === 'home') {
+    content = (
+      <Home
+        toggle={toggle}
+        onOpenNote={openNote}
+        onOpenPage={openPage}
+        onOpenClass={(classId) => choose({ kind: 'class', classId })}
+        onCreateClass={(name) => void addClass(name)}
+      />
+    )
   } else if (notes !== null && classes !== null) {
     content = (
       <ClassPage
@@ -819,10 +851,7 @@ function Workspace({
           </>
         }
         onQueryChange={setQuery}
-        onSelect={(id) => {
-          setFocusEditor(false)
-          setSelectedId(id)
-        }}
+        onSelect={openNote}
         onCreate={() => void create()}
         onOpenBook={setOpenBookId}
         onCreateBook={(name) => void addBook(name)}
@@ -859,14 +888,7 @@ function Workspace({
           unfiledCount={unfiled}
           selection={selection}
           creating={creating}
-          onSelect={(next) => {
-            setRailOpen(false)
-            // The search belongs to the shelf it was typed on, and the box
-            // is rebuilt with the page.
-            setQuery('')
-            setGone(null)
-            setChosen(next)
-          }}
+          onSelect={choose}
           onCreatingChange={setCreating}
           onCreate={(name) => void addClass(name)}
         />

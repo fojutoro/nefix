@@ -227,7 +227,7 @@ describe('the remembered class', () => {
     await archiveClass(created.id)
 
     expect(await readLastWrittenClassId()).toBeNull()
-    // Two separate keys: selecting Today may not forget where to write.
+    // Two separate keys: selecting Home may not forget where to write.
     expect(await readLastClassId()).toBeNull()
   })
 })

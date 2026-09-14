@@ -243,7 +243,7 @@ input:-webkit-autofill:focus {
   margin-top: calc(var(--gap) * 3);
 }
 
-/* Today, Unfiled and Archived are ways in, not subjects. Set like labels so
+/* Home, Unfiled and Archived are ways in, not subjects. Set like labels so
    they cannot be mistaken for the heading of the rail. */
 .rail-shortcut {
   color: var(--text-muted);
@@ -2355,4 +2355,246 @@ input:-webkit-autofill:focus {
   color: var(--text-muted);
   font-size: var(--small);
   margin: 0;
+}
+
+/* Read rather than written in, so narrower than a class page: the deadline,
+   the recents and the classes have to fit above the fold of a laptop. */
+.home {
+  max-width: 46rem;
+}
+
+.home-head {
+  align-items: baseline;
+  display: flex;
+  gap: calc(var(--gap) * 2);
+  justify-content: space-between;
+  margin-bottom: calc(var(--gap) * 3);
+}
+
+/* Quiet on purpose: --title and not --display. The loud thing on this page is
+   the deadline under it. */
+.home-head h1 {
+  font-size: var(--title);
+  font-weight: 400;
+  margin: 0;
+}
+
+.home-head select {
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font-size: var(--meta);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* More space between sections than within them, so each reads as a block. The
+   spacing groups them; there is no rule under a heading. */
+.home-section {
+  margin: 0 0 calc(var(--gap) * 6);
+}
+
+.home-section-head {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 var(--gap);
+}
+
+.home-section-head h2 {
+  margin: 0;
+}
+
+/* The row wraps rather than scrolling: four to six cards fit a laptop, and a
+   scroller would hide cards that fit behind a gesture. */
+.class-cards {
+  display: grid;
+  gap: calc(var(--gap) * 1.5);
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.class-cards li {
+  display: flex;
+}
+
+.class-card {
+  align-items: flex-start;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--gap) / 2);
+  min-height: 7.5rem;
+  padding: calc(var(--gap) * 1.5);
+  text-align: start;
+  transition:
+    box-shadow var(--fade) ease-out,
+    transform var(--fade) ease-out;
+  width: 100%;
+}
+
+/* The one piece of motion on the page, and only under the pointer. */
+.class-card:not(.class-card-new):hover {
+  background: var(--card);
+  box-shadow: 0 2px 12px var(--lift-hover);
+  transform: translateY(-1px);
+}
+
+.class-card-icon {
+  color: var(--class-colour, var(--text-muted));
+}
+
+.class-card-name {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* At the foot of the card, so the answers line up across the row. */
+.class-card-slot {
+  display: grid;
+  gap: 2px;
+  margin-top: auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.class-card-title {
+  font-size: var(--small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The edge finds the card at a glance across the row; the countdown in the
+   same colour makes it legible once found. */
+.class-card[data-late='true'] {
+  border-left: 3px solid var(--danger);
+  padding-left: calc(var(--gap) * 1.5 - 2px);
+}
+
+.class-card[data-late='true'] .class-card-slot .meta {
+  color: var(--danger);
+}
+
+/* Outlined rather than filled: a place for a class, not one. */
+.class-card-new {
+  align-items: center;
+  background: none;
+  border: 1px dashed var(--border-input);
+  color: var(--accent);
+  justify-content: center;
+}
+
+.class-card-new input {
+  min-width: 0;
+  width: 100%;
+}
+
+/* After the rules it overrides and not in the block near the rail: a media
+   query adds no specificity, so an earlier override loses to the hover rule. */
+@media (prefers-reduced-motion: reduce) {
+  .class-card {
+    transition: none;
+  }
+
+  .class-card:not(.class-card-new):hover {
+    transform: none;
+  }
+}
+
+.home-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.home-row,
+.home-deadline {
+  align-items: baseline;
+  column-gap: calc(var(--gap) * 2);
+  display: grid;
+  padding: calc(var(--gap) / 2) 0;
+}
+
+.home-row {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  grid-template-columns: 1rem minmax(0, 1fr) 4.5rem;
+  text-align: start;
+  width: 100%;
+}
+
+.home-row:hover {
+  background: var(--raised);
+}
+
+.home-icon {
+  align-self: center;
+  color: var(--text-muted);
+}
+
+.home-name,
+.home-class {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-row time {
+  text-align: end;
+}
+
+.home-deadline {
+  grid-template-columns: 7rem minmax(0, 1fr) 11rem;
+}
+
+/* The one place on this page --danger is spent, as on the class page. */
+.home-deadline[data-late='true'] > .meta:first-child {
+  color: var(--danger);
+}
+
+.home-new {
+  border: 0;
+  color: var(--accent);
+  padding: var(--gap) 0;
+}
+
+.home-section-head .home-new {
+  padding: 0;
+}
+
+.home-create {
+  display: flex;
+  padding: var(--gap) 0;
+}
+
+.home-create input {
+  flex: 1;
+  min-width: 0;
+}
+
+.home-more {
+  margin: var(--gap) 0 0;
+}
+
+/* A phone has no room for the class column, and the name is what matters. */
+@media (width < 600px) {
+  .home-deadline {
+    grid-template-columns: 6rem minmax(0, 1fr);
+  }
+
+  .home-class {
+    display: none;
+  }
 }
