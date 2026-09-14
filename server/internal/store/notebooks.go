@@ -23,7 +23,11 @@ type Notebook struct {
 	// 'notes' or 'collegebook'. Validated at the handler rather than by the
 	// column, so an unknown kind from a newer client is a 400 and not a
 	// constraint failure that breaks its sync.
-	Kind      string
+	Kind string
+	// The client's appearance settings for this book, as the JSON text it
+	// sent. Opaque here: this package stores and returns the bytes and never
+	// reads them. Nil is a book that has set none.
+	Settings  *string
 	Version   int64
 	Seq       int64
 	CreatedAt time.Time
@@ -37,12 +41,13 @@ type NotebookInput struct {
 	Name      string
 	IsGeneral bool
 	Kind      string
+	Settings  *string
 	Version   int64
 	DeletedAt *time.Time
 }
 
 const notebookColumns = `id, author_id, class_id, name, is_general, kind,
-	version, seq, created_at, updated_at, deleted_at`
+	settings, version, seq, created_at, updated_at, deleted_at`
 
 func scanNotebook(r row) (*Notebook, error) {
 	var n Notebook
@@ -50,7 +55,7 @@ func scanNotebook(r row) (*Notebook, error) {
 	var deletedAt sql.NullString
 
 	err := r.Scan(&n.ID, &n.AuthorID, &n.ClassID, &n.Name, &n.IsGeneral, &n.Kind,
-		&n.Version, &n.Seq, &createdAt, &updatedAt, &deletedAt)
+		&n.Settings, &n.Version, &n.Seq, &createdAt, &updatedAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -108,17 +113,18 @@ func (db *DB) UpsertNotebook(ctx context.Context, userID int64, in NotebookInput
 	if existing == nil {
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO notebooks (id, author_id, class_id, name, is_general, kind,
-				version, seq, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-			in.ID, userID, in.ClassID, in.Name, in.IsGeneral, kind,
+				settings, version, seq, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+			in.ID, userID, in.ClassID, in.Name, in.IsGeneral, kind, in.Settings,
 			seq, nullTime(in.DeletedAt))
 	} else {
 		_, err = tx.ExecContext(ctx,
 			`UPDATE notebooks SET class_id = ?, name = ?, is_general = ?, kind = ?,
-				version = version + 1, seq = ?,
+				settings = ?, version = version + 1, seq = ?,
 				updated_at = datetime('now'), deleted_at = ?
 			WHERE id = ?`,
-			in.ClassID, in.Name, in.IsGeneral, kind, seq, nullTime(in.DeletedAt), in.ID)
+			in.ClassID, in.Name, in.IsGeneral, kind, in.Settings, seq,
+			nullTime(in.DeletedAt), in.ID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("writing notebook %s: %w", in.ID, err)

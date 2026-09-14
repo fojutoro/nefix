@@ -1,4 +1,5 @@
 import { createPage } from './notes.ts'
+import { writeSettings, type BookSettings } from './settings.ts'
 import { db, type Notebook } from './schema.ts'
 import { uuidv7 } from './uuid.ts'
 
@@ -16,6 +17,7 @@ export async function createNotebook(
     // Only createClass makes a general notebook, and it does so directly.
     isGeneral: false,
     kind: 'notes',
+    settings: null,
     createdAt: timestamp,
     updatedAt: timestamp,
     deletedAt: null,
@@ -42,6 +44,7 @@ export async function createCollegebook(
     name,
     isGeneral: false,
     kind: 'collegebook',
+    settings: null,
     createdAt: timestamp,
     updatedAt: timestamp,
     deletedAt: null,
@@ -51,7 +54,9 @@ export async function createCollegebook(
   }
   await db.transaction('rw', db.notebooks, db.notes, async () => {
     await db.notebooks.add(book)
-    await createPage(book.id)
+    // An ordinary heading, written once and then the user's. Nothing watches
+    // it, nothing removes it, and no later page gets one.
+    await createPage(book.id, `# ${name}\n\n`)
   })
   return book
 }
@@ -131,5 +136,43 @@ export async function deleteNotebook(id: string): Promise<void> {
       .where('notebookId')
       .equals(id)
       .modify({ notebookId: null, updatedAt: timestamp, dirty: true })
+  })
+}
+
+// Settings are merged into whatever the book already holds rather than
+// replacing it, so a key written by a newer client survives being edited here.
+// Dirty, because the appearance of a book is something the server has to be
+// told about: it follows the reader to their other devices.
+export async function updateBookSettings(
+  id: string,
+  patch: Partial<BookSettings>,
+): Promise<void> {
+  await db.transaction('rw', db.notebooks, async () => {
+    const found = await db.notebooks.get(id)
+    if (!found || found.deletedAt !== null) {
+      throw new Error(`notebook ${id} not found`)
+    }
+    await db.notebooks.update(id, {
+      settings: writeSettings(found.settings, patch),
+      updatedAt: now(),
+      dirty: true,
+    })
+  })
+}
+
+// Null, not a blob of today's defaults. A book that was reset then follows the
+// defaults wherever they go, which is the whole difference between "reset" and
+// "set to these twelve values".
+export async function resetBookSettings(id: string): Promise<void> {
+  await db.transaction('rw', db.notebooks, async () => {
+    const found = await db.notebooks.get(id)
+    if (!found || found.deletedAt !== null) {
+      throw new Error(`notebook ${id} not found`)
+    }
+    await db.notebooks.update(id, {
+      settings: null,
+      updatedAt: now(),
+      dirty: true,
+    })
   })
 }

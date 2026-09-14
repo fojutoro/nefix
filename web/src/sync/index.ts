@@ -1,3 +1,4 @@
+import { beginCycle, endCycle } from './debug.ts'
 import { pullRemoteChanges } from './pull.ts'
 import { pushDirtyRows } from './push.ts'
 import { statusFor, syncState, type SyncSummary } from './state.ts'
@@ -18,6 +19,8 @@ export async function sync(): Promise<SyncSummary> {
   if (running) return nothing()
   running = true
   const summary = nothing()
+  beginCycle()
+  let failure: Error | null = null
 
   try {
     // Push before pull, always. Pull first and a remote version overwrites a
@@ -41,12 +44,18 @@ export async function sync(): Promise<SyncSummary> {
       })
     }
   } catch (error) {
+    failure = error instanceof Error ? error : new Error(String(error))
     syncState.setState({
       status: statusFor(error),
       lastPull: summary.pull,
       lastError: error instanceof Error ? error : new Error(String(error)),
     })
   } finally {
+    // After the halves have recorded theirs, so one cycle is one entry with
+    // both sides on it. A push that reported a failure through syncState
+    // rather than throwing is on the record too: failure is null there, and
+    // the push half carries the count.
+    endCycle(failure)
     running = false
   }
 

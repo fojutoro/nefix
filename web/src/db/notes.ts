@@ -81,9 +81,15 @@ async function lastOrder(notebookId: string): Promise<number> {
   return pages.length === 0 ? 0 : pages[pages.length - 1]!.pageOrder!
 }
 
-export async function createPage(notebookId: string): Promise<Note> {
+// A body only for the first page of a fresh collegebook, which opens on its
+// name. Every other page starts empty.
+export async function createPage(
+  notebookId: string,
+  bodyMd = '',
+): Promise<Note> {
   return createNote({
     notebookId,
+    bodyMd,
     pageOrder: (await lastOrder(notebookId)) + 1,
   })
 }
@@ -186,6 +192,15 @@ export async function clearEverything(): Promise<void> {
   await db.transaction('rw', tables, async () => {
     for (const table of tables) await table.clear()
   })
+}
+
+// liveQuery for the same reason observeNote uses one: the dot in the rail has
+// to go yellow the moment a keystroke makes a row dirty, and nothing on the
+// write path knows the dot exists. Three in-memory filters per change, which
+// is the trade declareSchema explains — dirty is a boolean and cannot be
+// indexed.
+export function observeDirtyCount(): Observable<number> {
+  return liveQuery(() => countDirtyRows())
 }
 
 // liveQuery rather than a counter handed down from the sync cycle: the

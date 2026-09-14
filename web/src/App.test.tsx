@@ -374,6 +374,7 @@ describe('App auth wall', () => {
     render(<App />)
     await screen.findByRole('button', { name: 'New note' })
 
+    fireEvent.click(screen.getByRole('button', { name: /^Sync/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
     await waitFor(async () => expect(await db.notes.count()).toBe(0))
@@ -390,6 +391,7 @@ describe('App auth wall', () => {
     render(<App />)
     await screen.findByRole('button', { name: 'New note' })
 
+    fireEvent.click(screen.getByRole('button', { name: /^Sync/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
     await waitFor(() => expect(window.confirm).toHaveBeenCalled())
@@ -405,6 +407,7 @@ describe('App auth wall', () => {
     render(<App />)
     await screen.findByRole('button', { name: 'New note' })
 
+    fireEvent.click(screen.getByRole('button', { name: /^Sync/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
     // Counting notes alone, this reads as nothing to lose, and the notebook
@@ -1488,5 +1491,138 @@ describe('App collegebooks', () => {
       .toArray()
     expect(created).toMatchObject({ name: 'Prednášky', dirty: true })
     expect(await listPages(created!.id)).toHaveLength(1)
+  })
+
+  // The page only, without reaching for the panel: this is a reader looking
+  // at a book, not one changing it.
+  const openPage = async (name = 'Prednášky') => {
+    fireEvent.click(await screen.findByRole('button', { name: RegExp(`^${name}`) }))
+    await waitFor(() =>
+      expect(document.querySelectorAll('.tiptap').length).toBeGreaterThan(0),
+    )
+    return document.querySelector('.book')!
+  }
+
+  // The end of the path the other tests cover in pieces. The store round-trips
+  // settings, the wire carries them and the pull writes them — and none of
+  // that reaches the reader if the open book is never re-read from the row the
+  // pull just changed.
+  it('shows a setting that arrived in a pull, without a reload', async () => {
+    const cls = await seedClass('Diskrétna matematika')
+    const book = await createCollegebook('Prednášky', cls.id)
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      render(<App />)
+      await openClass('Diskrétna matematika')
+      const sheet = await openPage()
+      expect(sheet.getAttribute('data-ruling')).toBe('ruled')
+
+      // Exactly what pullRemoteChanges does when the other device's row
+      // arrives: the notebook is written, clean, with the settings on it.
+      vi.mocked(sync).mockImplementation(async () => {
+        await db.notebooks.update(book.id, {
+          settings: '{"ruling":"squared","paper":"#1c2733"}',
+          dirty: false,
+        })
+        return {
+          push: { pushed: 0, conflicted: 0, forbidden: 0, failed: 0 },
+          pull: { applied: 1, skipped: 0, pages: 1 },
+          changed: true,
+        }
+      })
+
+      // Past the debounce, then the trigger a returning reader actually
+      // produces.
+      vi.advanceTimersByTime(2_100)
+      window.dispatchEvent(new Event('focus'))
+
+      await waitFor(() =>
+        expect(document.querySelector('.book')!.getAttribute('data-ruling')).toBe(
+          'squared',
+        ),
+      )
+      expect(document.querySelector('.book')!.getAttribute('style')).toContain(
+        '#1c2733',
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  const openBook = async (name = 'Prednášky') => {
+    fireEvent.click(await screen.findByRole('button', { name: RegExp(`^${name}`) }))
+    await waitFor(() =>
+      expect(document.querySelectorAll('.tiptap').length).toBeGreaterThan(0),
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: 'Page appearance' })[0]!)
+    return screen.getByRole('dialog')
+  }
+
+  // No apply button, and nothing reloads. The control moves, the row is
+  // written, and the sheet under it is already different.
+  it('changes the page as a setting moves, and writes it to the book', async () => {
+    const cls = await seedClass('Diskrétna matematika')
+    const book = await createCollegebook('Prednášky', cls.id)
+    render(<App />)
+    await openClass('Diskrétna matematika')
+    const panel = await openBook()
+
+    const sheet = () => document.querySelector('.book')!
+    expect(sheet().getAttribute('data-ruling')).toBe('ruled')
+
+    fireEvent.click(within(panel).getByRole('radio', { name: 'Squared' }))
+
+    // The page, not a reload: the same .book element is still on screen and
+    // it is now squared.
+    await waitFor(() =>
+      expect(sheet().getAttribute('data-ruling')).toBe('squared'),
+    )
+    // And the book carries it, as a blob the server will be told about.
+    const saved = await db.notebooks.get(book.id)
+    expect(JSON.parse(saved!.settings!)).toEqual({ ruling: 'squared' })
+    expect(saved!.dirty).toBe(true)
+
+    // A second setting merges rather than replacing, so the first survives.
+    fireEvent.change(within(panel).getByLabelText('Line pitch'), {
+      target: { value: '2.2' },
+    })
+    await waitFor(async () =>
+      expect(
+        JSON.parse((await db.notebooks.get(book.id))!.settings!),
+      ).toEqual({ ruling: 'squared', pitch: 2.2 }),
+    )
+    await waitFor(() => expect(sheet().getAttribute('style')).toContain('2.2'))
+  })
+
+  // Null, not a blob holding today's defaults: the difference is whether a
+  // later change to those defaults ever reaches this book again.
+  it('clears the blob to null on reset, rather than writing the defaults', async () => {
+    const cls = await seedClass('Diskrétna matematika')
+    const book = await createCollegebook('Prednášky', cls.id)
+    await db.notebooks.update(book.id, {
+      settings: '{"ruling":"squared","paper":"#000000"}',
+    })
+    render(<App />)
+    await openClass('Diskrétna matematika')
+    const panel = await openBook()
+    await waitFor(() =>
+      expect(document.querySelector('.book')!.getAttribute('data-ruling')).toBe(
+        'squared',
+      ),
+    )
+
+    const ask = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    fireEvent.click(
+      within(panel).getByRole('button', { name: 'Reset to defaults' }),
+    )
+
+    await waitFor(async () =>
+      expect((await db.notebooks.get(book.id))!.settings).toBeNull(),
+    )
+    // And the page is back to the defaults without being reopened.
+    expect(document.querySelector('.book')!.getAttribute('data-ruling')).toBe(
+      'ruled',
+    )
+    ask.mockRestore()
   })
 })

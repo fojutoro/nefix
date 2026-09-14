@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Note } from '../../db/schema.ts'
+import type { BookSettings as Settings } from '../../db/settings.ts'
+import BookSettings from './BookSettings.tsx'
 import Editor from './Editor.tsx'
 import { useAutosave, type SaveNote } from './useAutosave.ts'
 
@@ -25,6 +27,9 @@ type PageProps = {
   mathLabel: string
   untitled: string
   save: SaveNote
+  settings: Settings
+  onSettings: (patch: Partial<Settings>) => void
+  onResetSettings: () => void
 }
 
 function Page({
@@ -36,6 +41,9 @@ function Page({
   mathLabel,
   untitled,
   save,
+  settings,
+  onSettings,
+  onResetSettings,
 }: PageProps) {
   // One autosave per page, so one pending write per page. Sharing a hook
   // across the stack would let the debounce started on page 2 land on
@@ -44,6 +52,15 @@ function Page({
 
   return (
     <li className="book-page" data-page={page.id}>
+      {/* On every page, opening the settings for the whole book. Fourteen
+          pages are not fourteen places to set this: a notebook is ruled or
+          plain, and one ruled on page six looks broken rather than
+          customised. */}
+      <BookSettings
+        settings={settings}
+        onChange={onSettings}
+        onReset={onResetSettings}
+      />
       {mounted ? (
         // Its own editor, and so its own echo-back guard: the guard watches
         // the row it was given, and a page being typed into must not be
@@ -68,6 +85,12 @@ function Page({
         // stylesheet, for a page that has never been on screen.
         <div className="page-holder">{page.bodyMd}</div>
       )}
+      {/* The writable area, printed on the paper: a rule at its top and one at
+          its bottom. Anchored to the top of the sheet rather than to the
+          content, so on an overflowing page the lower rule stays where the
+          page should have ended, which is the thing worth knowing. It is a
+          guide and not a limit — nothing here clips or reflows. */}
+      <div className="page-guides" aria-hidden="true" />
       {/* Where the page nominally ends. Content that runs past it pushes the
           break down rather than being cut off: pages are manual, and nothing
           here measures blocks or reflows them into the next page. */}
@@ -87,6 +110,9 @@ type Props = {
   untitled: string
   save: SaveNote
   onCreatePage: () => void
+  settings: Settings
+  onSettings: (patch: Partial<Settings>) => void
+  onResetSettings: () => void
 }
 
 export default function Collegebook({
@@ -96,6 +122,9 @@ export default function Collegebook({
   untitled,
   save,
   onCreatePage,
+  settings,
+  onSettings,
+  onResetSettings,
 }: Props) {
   const { t } = useTranslation()
   const box = useRef<HTMLDivElement>(null)
@@ -148,8 +177,32 @@ export default function Collegebook({
     return () => observer.disconnect()
   }, [pages])
 
+  // The settings reach the page as custom properties and data attributes on
+  // one element, so a control moving is a style recalculation and not a
+  // remount of every editor in the book. They are scoped here rather than at
+  // the root for the reason the panel needs: nothing outside this box, the
+  // panel included, may be restyled by what a book is set to.
+  const paper = {
+    '--paper': settings.paper,
+    '--ink': settings.ink,
+    '--pitch': settings.pitch,
+    '--text-size': settings.textSize,
+    '--rule-inset': `${settings.ruleInset}%`,
+    '--page-lines': settings.pageLines,
+    '--grain': settings.grain,
+  } as CSSProperties
+
   return (
-    <div className="book" ref={box}>
+    <div
+      className="book"
+      ref={box}
+      style={paper}
+      data-ruling={settings.ruling}
+      data-face={settings.face}
+      data-rule={settings.ruleOn ? 'on' : 'off'}
+      data-folio={settings.pageNumbers ? 'on' : 'off'}
+      data-grain={settings.grainOn ? 'on' : 'off'}
+    >
       <ul className="book-pages" aria-label={t('book.pagesLabel')}>
         {pages.map((page, index) => (
           <Page
@@ -164,12 +217,22 @@ export default function Collegebook({
             mathLabel={mathLabel}
             untitled={untitled}
             save={save}
+            settings={settings}
+            onSettings={onSettings}
+            onResetSettings={onResetSettings}
           />
         ))}
       </ul>
-      <button type="button" className="book-add" onClick={onCreatePage}>
-        {t('book.newPage')}
-      </button>
+      {/* Boxed to a sheet's width, because the button's left inset is the
+          paper's margin and that is a percentage: a percentage padding
+          resolves against the containing block, so without this it would be
+          measured against the whole pane and stop lining up with the text the
+          moment the margin rule was moved. */}
+      <div className="book-foot">
+        <button type="button" className="book-add" onClick={onCreatePage}>
+          {t('book.newPage')}
+        </button>
+      </div>
     </div>
   )
 }

@@ -35,6 +35,7 @@ export async function createClass(input: {
     name: i18n.t('notebooks.general'),
     isGeneral: true,
     kind: 'notes',
+    settings: null,
     createdAt: timestamp,
     updatedAt: timestamp,
     deletedAt: null,

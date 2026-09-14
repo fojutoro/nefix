@@ -17,6 +17,7 @@ import {
   type WireNote,
   type WireNotebook,
 } from './api.ts'
+import { notePush } from './debug.ts'
 import { statusFor, syncState, type PushSummary } from './state.ts'
 
 // The server answers a larger batch with 413.
@@ -57,6 +58,7 @@ const toWireNotebook = (row: Notebook): PushNotebook => ({
   name: row.name,
   is_general: row.isGeneral,
   kind: row.kind,
+  settings: row.settings,
   version: row.version,
   deleted_at: row.deletedAt,
 })
@@ -105,6 +107,10 @@ export const fromWireNotebook = (server: WireNotebook): Notebook => ({
   name: server.name,
   isGeneral: server.is_general,
   kind: server.kind,
+  // Written through as it came back, never re-encoded: a server older than
+  // the client that wrote the blob still returns the bytes it was given, and
+  // parsing them here to store them would be the one place they could be lost.
+  settings: server.settings,
   createdAt: server.created_at,
   updatedAt: server.updated_at,
   deletedAt: server.deleted_at,
@@ -280,6 +286,10 @@ export async function pushDirtyRows(): Promise<PushSummary> {
 
   let queued = 0
   let handled = 0
+  // What the run carried, for the debug panel. Recorded rather than returned:
+  // PushSummary is what the UI acts on, and widening it for a diagnostic
+  // would put these counts in every fixture that builds one.
+  let sent = { classes: 0, notebooks: 0, notes: 0 }
   try {
     // Inside the try, because publishing the status notifies subscribers and
     // one of them can throw. Outside it, that throw would strand the guard
@@ -291,6 +301,7 @@ export async function pushDirtyRows(): Promise<PushSummary> {
     const notebooks = await db.notebooks.filter((row) => row.dirty).toArray()
     const notes = await db.notes.filter((row) => row.dirty).toArray()
     queued = classes.length + notebooks.length + notes.length
+    sent = { classes: classes.length, notebooks: notebooks.length, notes: notes.length }
 
     // Each array is capped at a hundred on its own, so the number of
     // requests is set by the longest of the three rather than by their
@@ -333,6 +344,8 @@ export async function pushDirtyRows(): Promise<PushSummary> {
     })
   } finally {
     running = false
+    notePush({ ...sent, accepted: summary.pushed, conflicted: summary.conflicted,
+      forbidden: summary.forbidden, failed: summary.failed })
   }
   return summary
 }

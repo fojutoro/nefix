@@ -21,8 +21,10 @@
   --accent: #9b1c2e;
   --danger: #c2410c;
   --selection: #f2c879;
-  /* The menu panel's shadow, which is the only thing that floats. */
+  /* The menu panel's shadow. --lift-page is a sheet of paper's, much softer:
+     a menu hovers over the page, a page rests on the desk. */
   --lift-hover: rgba(26, 25, 23, 0.13);
+  --lift-page: rgba(26, 25, 23, 0.09);
   /* Hover fill. On cream there is too little contrast for a border change
      alone to register as feedback. */
   --raised: #f0e9dd;
@@ -53,19 +55,56 @@
      for it. */
   --card: #fffdf8;
   --ruling: #f7f2e9;
-  /* The ruled line pitch, and the card grid's rhythm with it. */
-  --line: 1.625rem;
+  /* The ruled line pitch: the book's own line box, so the ruling is drawn
+     from the same two numbers the text is set with and follows both when
+     either is changed. It will still not register with every line — a heading
+     or a formula is taller than a line of prose — and it is not meant to.
+     That is why the pitch is a control: it turns a thing that can never quite
+     be right into a thing the reader decides. This is paper, not a baseline
+     grid, and nothing anywhere tries to align to it. */
+  --line: calc(var(--body) * var(--text-size) * var(--pitch));
 
   /* 8px, and every measurement in this file is a multiple of it. */
   --gap: 0.5rem;
 
-  /* The margin rule sits here, measured from the left edge of its pane, and
-     content clears it. */
+  /* The margin rule of the class page and the note editor, measured from the
+     left edge of its pane. A collegebook does not use it: a sheet carries its
+     rule at --sheet-rule, on the paper. */
   --margin: 2.75rem;
-  /* What a page is worth before its content decides otherwise: the height the
-     break is drawn at, and the height an unmeasured placeholder stands in at.
-     Not a paper size — a collegebook page is as tall as a screenful. */
-  --page: 52rem;
+
+  /* A sheet's own margins. The left one is measured from the printed rule
+     rather than fixed: the rule's inset is a setting, a percentage of the
+     paper's width, and the text has to keep clearing it wherever it is put.
+     13% of a 46.1rem sheet is 6rem, and 6rem plus this clearance is the
+     7.5rem the page was built at.
+
+     Every value below with a --book prefix is written by the settings panel
+     onto .book as an inline custom property. The fallbacks here are what a
+     book with no settings gets, so they are the page exactly as it was before
+     any of this existed. */
+  --rule-inset: 13%;
+  --sheet-margin: calc(var(--rule-inset) + var(--gap) * 3);
+  --sheet-edge: calc(var(--gap) * 6);
+  --paper: #faf6ef;
+  --ink: #1a1917;
+  --pitch: 1.6;
+  --text-size: 1;
+  --page-lines: 35;
+  --grain: 0.25;
+  --face: system-ui, sans-serif;
+  /* The ruling is mixed from the ink rather than being a colour of its own.
+     A fixed --ruling was right while the paper was one colour; against paper
+     the reader chooses it would be invisible on white and invisible again on
+     black. Mixed from the ink it is faint on any paper the ink is readable
+     on, which is the same condition. */
+  --ruling: color-mix(in srgb, var(--ink) 14%, transparent);
+  /* What a page is worth before its content decides otherwise: the writable
+     band between the two margin guides, and the height an unmeasured
+     placeholder stands in at. Whole rules rather than a round number, so the
+     guide closing the band lands on a ruled line instead of between two. Not
+     a paper size, and set in lines rather than pixels because "35 lines" is
+     something a page can be and "560px" is not. */
+  --page: calc(var(--line) * var(--page-lines));
 
   /* One transition, used for one thing: content replacing content. */
   --fade: 120ms;
@@ -309,17 +348,181 @@ input:-webkit-autofill:focus {
   min-width: 0;
 }
 
-.offline {
-  color: var(--text-muted);
-  font-size: var(--meta);
-  margin: 0;
-  padding: calc(var(--gap) * 2) calc(var(--gap) * 3) var(--gap);
-}
-
+/* The whole rail footer: one dot. The line that used to be here rewrote
+   itself every few seconds beside the page someone was writing on. */
 .side-actions {
   display: flex;
   gap: calc(var(--gap) * 2);
   padding: 0 calc(var(--gap) * 2) calc(var(--gap) * 2) calc(var(--gap) * 3);
+}
+
+.sync-dot {
+  position: relative;
+}
+
+/* Still. No pulse, no spinner, no transition on the colour either: motion is
+   the thing this replaced, and a fade is motion. It is a button, and it is
+   sized to be one — the dot is drawn inside it rather than being it. */
+.dot {
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  height: 1.25rem;
+  padding: 0;
+  position: relative;
+  width: 1.25rem;
+}
+
+.dot::after {
+  background: var(--dot);
+  border-radius: 50%;
+  content: '';
+  height: 0.5rem;
+  inset: 0;
+  margin: auto;
+  position: absolute;
+  width: 0.5rem;
+}
+
+.dot:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.dot[data-state='green'] {
+  --dot: #3f7d4e;
+}
+
+.dot[data-state='yellow'] {
+  --dot: #b8860b;
+}
+
+.dot[data-state='red'] {
+  --dot: var(--danger);
+}
+
+/* Both panels declare their own ground, face and size rather than inheriting
+   any. They are anchored inside the rail, not inside a book, so a
+   collegebook's paper and ink cannot reach them — but the rule is stated here
+   because that is a fact about where they sit today and not about what they
+   are. Someone who has set black paper must still be able to find sign out. */
+.sync-panel,
+.sync-diag {
+  background: var(--card);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+  font-size: var(--body);
+  line-height: 1.5;
+}
+
+.sync-panel {
+  border: 1px solid var(--border);
+  bottom: calc(var(--gap) * 4);
+  box-shadow: 0 2px 12px var(--lift-hover);
+  display: grid;
+  gap: calc(var(--gap) * 2);
+  left: 0;
+  padding: calc(var(--gap) * 2);
+  position: absolute;
+  width: 19rem;
+  z-index: 3;
+}
+
+.sync-who {
+  display: grid;
+  gap: calc(var(--gap) / 4);
+}
+
+.sync-facts {
+  display: grid;
+  gap: calc(var(--gap) / 2) var(--gap);
+  grid-template-columns: auto 1fr;
+  margin: 0;
+}
+
+.sync-facts dt {
+  color: var(--text-muted);
+  font-size: var(--small);
+}
+
+.sync-facts dd {
+  margin: 0;
+  text-align: right;
+}
+
+.sync-actions {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: var(--gap);
+  padding-top: var(--gap);
+}
+
+/* Last, and quiet. It is not hidden — a user reporting a problem is exactly
+   who needs it — but it is not the thing this panel is for. */
+.sync-debug-open {
+  border: 0;
+  color: var(--text-muted);
+  margin-left: auto;
+  padding: calc(var(--gap) / 2);
+}
+
+.sync-debug-open:hover,
+.sync-debug-open:focus-visible {
+  color: var(--text);
+}
+
+.sync-diag {
+  border-top: 1px solid var(--border);
+  display: grid;
+  font-size: var(--small);
+  gap: var(--gap);
+  padding-top: var(--gap);
+}
+
+.sync-counts {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+
+.sync-counts :is(th, td) {
+  padding: 0 0 calc(var(--gap) / 4);
+  text-align: right;
+}
+
+.sync-counts :is(thead th, th[scope='row']) {
+  color: var(--text-muted);
+  font-weight: 400;
+  text-align: left;
+}
+
+.sync-counts thead th:not(:first-child) {
+  text-align: right;
+}
+
+/* Wrapped rather than clipped: an error whose end is cut off is an error
+   nobody can report. */
+.sync-error {
+  color: var(--danger);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sync-cycles {
+  display: grid;
+  font-size: var(--meta);
+  gap: calc(var(--gap) / 2);
+  list-style: none;
+  margin: 0;
+  max-height: 12rem;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.sync-cycles li {
+  display: grid;
+  font-variant-numeric: tabular-nums;
 }
 
 .banner {
@@ -351,6 +554,13 @@ input:-webkit-autofill:focus {
   z-index: 0;
 }
 
+/* Not in a collegebook: there the rule is printed on each sheet, inset from
+   the paper's own left edge, and a second one at the pane's edge would read
+   as a divider beside it. One red vertical line on the screen, still. */
+.content:has(.book)::before {
+  content: none;
+}
+
 /* The one piece of motion in the interface: content replacing content. It is
    armed only after something has been on screen, so nothing animates on load. */
 .content[data-fade='true'] {
@@ -363,17 +573,11 @@ input:-webkit-autofill:focus {
   }
 }
 
-/* Ruled paper, on the page and not in the editor: a rendered formula is
-   taller than a text line, so the ruling would drift out of alignment from
-   the first $…$ onward — wrong exactly where the notes get interesting. */
+/* No ruling here any more. A class page is a table of contents — a list of
+   names and dates — and ruled paper behind it was decoration on the one
+   screen in the app that is not a page of notes. The ruling has gone to the
+   collegebook, which is what ruled paper is for. */
 .page {
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent calc(var(--line) - 1px),
-    var(--ruling) calc(var(--line) - 1px),
-    var(--ruling) var(--line)
-  );
   padding: calc(var(--gap) * 4) calc(var(--gap) * 4) calc(var(--gap) * 6)
     calc(var(--margin) + var(--gap) * 3);
   position: relative;
@@ -744,15 +948,14 @@ input:-webkit-autofill:focus {
   padding: var(--gap);
 }
 
-/* No ruling here, and this is the second time that conclusion has been
-   reached in this file: see .page, where the ruling was deliberately kept off
-   the editor because a rendered formula is taller than a line of type. It was
-   added here anyway, with a comment conceding the lines could not stay in
-   register. Ruled paper promises that every line sits on a rule. A document
-   with headings, lists, code blocks and KaTeX cannot keep that promise
-   without locking all of them to a grid, and KaTeX sizes display maths from
-   the formula's own contents. The ruling is the class page's signature; the
-   editor is clean cream. */
+/* No ruling here, twice concluded: a rendered formula is taller than a line
+   of type, and a document with headings, lists, code blocks and KaTeX cannot
+   keep ruled paper's promise that every line sits on a rule without locking
+   all of them to a grid. That has not changed and nothing below tries to
+   align to anything. What changed is where the ruling is drawn: on the sheet
+   in a collegebook, under the editor rather than in it, at the pitch plain
+   prose happens to take. The text that does not land on a rule is a heading
+   or a formula, which on real paper does not either. */
 .editor {
   flex: 1;
   min-height: 0;
@@ -779,11 +982,13 @@ input:-webkit-autofill:focus {
    Past about 80 the eye loses the start of the next line, however much pane
    is left over. Held against the margin rule rather than centred: the rule is
    the content pane's own, continuing, and centring would strand it far to the
-   left. */
+   left. In a collegebook the sheet is centred instead and carries the rule
+   with it, which is the same decision — the text stays beside its rule. */
 .editor .tiptap {
   font-size: var(--body);
-  /* A ratio rather than the --line pitch: nothing has to register with a
-     ruling any more, and 1.6 is what proportional text at this size wants. */
+  /* 1.6 is what proportional text at this size wants, and --line is derived
+     from it rather than the other way round: the ruling follows the text, and
+     the text is never asked to follow the ruling. */
   line-height: 1.6;
   max-width: 38em;
   min-height: 100%;
@@ -949,9 +1154,52 @@ input:-webkit-autofill:focus {
   min-width: 0;
 }
 
-.editor .tiptap input[type='checkbox'] {
-  accent-color: var(--accent);
+/* One checkbox for the application. It was accent-color on a native box here
+   and a native box in the settings panel, which meant two different squares
+   depending on the platform and neither of them this app's. Drawn rather than
+   tinted: a sharp corner, --border-input empty, --accent filled with a tick
+   in the panel's own light.
+
+   The two selectors share a block deliberately. A second definition beside
+   the first is how the swatch in the class menu and the swatch in the
+   settings panel came to be two rules fighting over one name. */
+.editor .tiptap input[type='checkbox'],
+.set-check input[type='checkbox'] {
+  appearance: none;
+  background: none;
+  block-size: 0.875rem;
+  border: 1px solid var(--border-input);
+  border-radius: 0;
+  inline-size: 0.875rem;
   margin: 0;
+  position: relative;
+}
+
+.editor .tiptap input[type='checkbox']:checked,
+.set-check input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* The tick, drawn: two borders on a rotated box. No glyph, so it cannot pick
+   up a font the rest of the app does not have. */
+.editor .tiptap input[type='checkbox']:checked::after,
+.set-check input[type='checkbox']:checked::after {
+  border: solid var(--card);
+  border-width: 0 2px 2px 0;
+  block-size: 0.5rem;
+  content: '';
+  inline-size: 0.25rem;
+  inset: 0 0 0.1rem 0;
+  margin: auto;
+  position: absolute;
+  rotate: 45deg;
+}
+
+.editor .tiptap input[type='checkbox']:focus-visible,
+.set-check input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
 }
 
 /* Monospace where it earns its place. 0.9em because a monospace face runs
@@ -1357,24 +1605,163 @@ input:-webkit-autofill:focus {
   overflow: visible;
 }
 
-/* The nominal height of a page, drawn by the break below. A page whose
-   content runs past it simply grows: nothing here clips, and nothing reflows
-   a block onto the next page. Pages are manual on purpose. */
-.book .editor .tiptap {
-  min-height: var(--page);
-  padding-bottom: calc(var(--gap) * 2);
+/* One sheet: as wide as the text measure plus the paper's own margins, and
+   centred, so the desk shows on both sides and the shadow describes four
+   edges instead of two. The paper is a colour now — it has to be, since it is
+   a setting — and the default is the desk's own shade, so a book that has set
+   nothing looks exactly as it did when the sheet was transparent. The ruling
+   is painted rather than bordered because a sheet that overflows has to grow
+   and keep it, and its phase starts at the top of the writable band so the
+   first line of type sits on the first rule. */
+.book-page {
+  background-color: var(--paper);
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(var(--line) - 1px),
+    var(--ruling) calc(var(--line) - 1px)
+  );
+  background-position: 0 calc(var(--gap) * 6);
+  background-repeat: repeat;
+  background-size: 100% var(--line);
+  box-shadow:
+    0 1px 1px var(--lift-page),
+    0 3px 10px var(--lift-page);
+  /* The gap under it is desk, and it is what makes the book a stack of sheets
+     rather than one long scroll. */
+  margin: 0 auto calc(var(--gap) * 5);
+  max-width: calc(38em + var(--gap) * 21);
+  position: relative;
 }
 
-/* A hairline and a number, which is the whole of the page break. It sits
-   where the content ends, so on an overflowing page it is further down than
-   the nominal height and that is the honest place for it. */
+/* Squares, which is what a maths student actually writes on. The second layer
+   is the same rule turned ninety degrees, starting at the margin rule rather
+   than at the paper's edge so the grid is square with the printing on it. */
+.book[data-ruling='squared'] .book-page {
+  background-image:
+    linear-gradient(
+      to bottom,
+      transparent calc(var(--line) - 1px),
+      var(--ruling) calc(var(--line) - 1px)
+    ),
+    linear-gradient(
+      to right,
+      transparent calc(var(--line) - 1px),
+      var(--ruling) calc(var(--line) - 1px)
+    );
+  background-position:
+    0 calc(var(--gap) * 6),
+    var(--rule-inset) 0;
+  background-size:
+    100% var(--line),
+    var(--line) 100%;
+}
+
+.book[data-ruling='none'] .book-page {
+  background-image: none;
+}
+
+/* The red margin rule, printed on the paper and inset from the paper's own
+   left edge rather than sitting at the pane's — a rule at the boundary
+   between the rail and the content reads as a divider, and one on the sheet
+   reads as printing. Its own element rather than another background layer, so
+   that switching it off does not have to restate the ruling underneath it. */
+.book-page::before {
+  background: var(--rule);
+  bottom: 0;
+  content: '';
+  left: var(--rule-inset);
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+
+.book[data-rule='off'] .book-page::before {
+  content: none;
+}
+
+/* The grain, generated rather than fetched, and painted in the ink rather
+   than in grey. Grey was right while the paper was one known colour; against
+   paper the reader chooses, a grey overlay washes a dark sheet pale and does
+   nothing at all to a white one. As a mask over the ink it darkens light
+   paper and lightens dark paper, which is what grain in paper does.
+   
+   The noise is fractal at baseFrequency 0.4 — features about 2.5px, because
+   an earlier pass at 0.9 was about a CSS pixel across and a 2x display
+   resampled it into flat colour — and its alpha is squeezed to 0..0.18 so
+   that the strength setting has a usable range on top of it rather than
+   going straight from nothing to dirt. On the sheet only, never the rail or
+   the desk, and inert, so it touches neither text rendering nor selection.
+   One rule: `content: none` turns it off, and the setting below does exactly
+   that. */
+.book-page::after {
+  background-color: var(--ink);
+  content: '';
+  inset: 0;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='grain'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.4' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.18' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23grain)'/%3E%3C/svg%3E");
+  mask-mode: alpha;
+  mask-size: 160px 160px;
+  opacity: var(--grain);
+  pointer-events: none;
+  position: absolute;
+}
+
+.book[data-grain='off'] .book-page::after {
+  content: none;
+}
+
+/* Where the writable area begins and ends, across the whole sheet so the two
+   close the ruling into a band rather than hanging inside it. In the margin
+   rule's own ink at a sixth of its strength: printing on the paper, not
+   interface on top of it. Anchored to the top of the sheet, so a page that
+   overflows pushes its content past the lower one and that rule stays put
+   marking where the page should have ended — which is the thing the reader
+   wants to know. */
+.page-guides {
+  border-bottom: 1px solid var(--rule);
+  border-top: 1px solid var(--rule);
+  height: var(--page);
+  left: 0;
+  opacity: 0.16;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: calc(var(--gap) * 6);
+}
+
+/* The writable band is --page tall and the padding around it is the paper's
+   margin, so text starts to the right of the printed rule rather than at the
+   sheet's edge. Deeper at the top than at the bottom, because the folio goes
+   below. A page whose content runs past the band simply grows: nothing here
+   clips, and nothing reflows a block onto the next page. Pages are manual on
+   purpose. */
+.book .editor .tiptap {
+  color: var(--ink);
+  font-family: var(--face);
+  font-size: calc(var(--body) * var(--text-size));
+  /* The line box is the ruling's pitch, which is what puts prose on the
+     rules. A heading or a formula is taller and will not land on one; that is
+     the honest behaviour and the reason the pitch is adjustable at all. */
+  line-height: var(--pitch);
+  min-height: var(--page);
+  padding-bottom: calc(var(--gap) * 4);
+  padding-left: var(--sheet-margin);
+  padding-right: var(--sheet-edge);
+  padding-top: calc(var(--gap) * 6);
+}
+
+/* The folio, on the sheet: bottom right, inside the paper's right margin. It
+   travels with the content, so on an overflowing page it moves down with the
+   sheet that grew and stays on the page it numbers. No hairline — the sheet's
+   own edge ends the page. */
 .page-break {
   align-items: center;
-  border-top: 1px solid var(--border);
+  /* The ink, faded: a folio in a fixed grey vanishes on dark paper, and the
+     number is printed on the sheet like everything else here. */
+  color: color-mix(in srgb, var(--ink) 55%, transparent);
   display: flex;
   justify-content: flex-end;
-  margin: 0 0 calc(var(--gap) * 2);
-  padding: calc(var(--gap) / 2) calc(var(--gap) * 3) 0 0;
+  margin: 0;
+  padding: 0 var(--sheet-edge) var(--gap) 0;
 }
 
 /* A page whose editor is not built yet. Its height is the one the observer
@@ -1383,22 +1770,367 @@ input:-webkit-autofill:focus {
    screen. The text shows through muted, so scrolling past reads as pages
    going by rather than as empty boxes. */
 .page-holder {
-  color: var(--text-muted);
-  font-size: var(--body);
-  height: var(--measured, var(--page));
-  line-height: 1.6;
-  max-width: 38em;
+  /* Border-box, so the measured height is the height the sheet had and the
+     padding does not add itself on top of it. The fallback is the band plus
+     the margins around it: a sheet nobody has scrolled to yet stands at the
+     height a built one would. */
+  box-sizing: border-box;
+  color: color-mix(in srgb, var(--ink) 55%, transparent);
+  font-family: var(--face);
+  font-size: calc(var(--body) * var(--text-size));
+  height: var(--measured, calc(var(--page) + var(--gap) * 10));
+  line-height: var(--pitch);
+  /* The sheet is the measure now, and this fills it: same margins as the
+     editor it stands in for, so the text starts on the same line. */
+  max-width: none;
   overflow: hidden;
-  padding: var(--gap) calc(var(--gap) * 3) 0
-    calc(var(--margin) + var(--gap) * 3);
+  padding: calc(var(--gap) * 6) var(--sheet-edge) calc(var(--gap) * 4)
+    var(--sheet-margin);
   white-space: pre-wrap;
+}
+
+/* Named stacks, and only named stacks. Nothing here is fetched: a font that
+   arrives over the network is a font a collegebook does not have on the
+   train, and this is an offline-first app before it is anything else. */
+.book[data-face='serif'] {
+  --face: Georgia, 'Times New Roman', Times, serif;
+}
+
+.book[data-face='mono'] {
+  --face: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.book[data-folio='off'] .page-break {
+  display: none;
+}
+
+/* The panel, and the one rule it lives by: nothing a book is set to may reach
+   it. Every colour, face and size here is the application's own, declared
+   rather than inherited, so a reader who sets black paper and black text can
+   still find the button that undoes it. It sits inside the sheet because it
+   is anchored to a gear on the sheet — which is exactly why this has to be
+   said explicitly rather than assumed. */
+.book-settings {
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 12px var(--lift-hover);
+  color: var(--text);
+  display: grid;
+  font-family: system-ui, sans-serif;
+  font-size: var(--body);
+  gap: calc(var(--gap) * 2);
+  line-height: 1.5;
+  padding: calc(var(--gap) * 2);
+  position: absolute;
+  right: 0;
+  top: calc(var(--gap) * 4);
+  /* 20rem rather than 17, and the label column is 7.5 of it. Sized for the
+     Slovak, which is the longer of the two: "Rozstup linajok", "Okrajová
+     čiara" and "Veľkosť textu" against "Line pitch", "Margin rule" and "Text
+     size". */
+  width: 20rem;
+  --set-labels: 7.5rem;
+  /* One height for every control in here, so a row is a row whatever is in
+     it. */
+  --set-row: 1.75rem;
+  /* Above the sheets below it, which overlap nothing but would otherwise win
+     on document order. */
+  z-index: 2;
+}
+
+/* Outside the sheet, in the desk margin beside it, level with the top of the
+   page it belongs to. On the paper it read as part of the page rather than as
+   a control over it, and it was always there — a permanent mark in the corner
+   of every sheet in the book. */
+.book-gear {
+  position: absolute;
+  right: calc(var(--gap) * -6);
+  top: 0;
+  z-index: 2;
+}
+
+/* Hidden until the page is under the pointer, and shown whenever it has
+   keyboard focus or its panel is open. Hover alone would put it out of reach
+   of anyone not using a mouse; :focus-visible is what keeps it reachable, and
+   the button stays in the tab order the whole time because opacity does not
+   remove it the way display would.
+
+   A fade, and this is the one place in the book that gets one: it is a reveal
+   rather than a state change, and the objection to motion here was to a thing
+   that changed under the eye while someone wrote. */
+.book-gear {
+  opacity: 0;
+  transition: opacity var(--fade) ease-out;
+}
+
+.book-page:hover .book-gear,
+.book-gear:has(:focus-visible),
+.book-gear:has([aria-expanded='true']) {
+  opacity: 1;
+}
+
+.gear {
+  border: 0;
+  color: var(--text-muted);
+  line-height: 1;
+  padding: calc(var(--gap) / 2);
+}
+
+.gear:hover,
+.gear:focus-visible {
+  color: var(--text);
+}
+
+.book-settings fieldset {
+  border: 0;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: calc(var(--gap) / 2);
+  margin: 0;
+  padding: var(--gap) 0 0;
+}
+
+.book-settings fieldset:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.book-settings legend {
+  color: var(--text-muted);
+  font-size: var(--meta);
+  letter-spacing: 0.06em;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+/* Every row the same shape: a label column, the control, and the readout.
+   The label column is fixed rather than sized to its contents so the left
+   edge of the panel is one line down its whole height, and it is wide enough
+   for the Slovak — "Rozstup linajok" is five characters longer than "Line
+   pitch". A label that still does not fit wraps; the row grows and the
+   control beside it is not broken, which is the part that matters. */
+.set-slider,
+.set-check {
+  align-items: center;
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: var(--set-labels) 1fr auto;
+  min-height: var(--set-row);
+}
+
+.set-label {
+  color: var(--text);
+  font-size: var(--small);
+}
+
+.set-slider .meta {
+  font-variant-numeric: tabular-nums;
+  /* Held open, so a value going from 9% to 10% does not shunt the track. */
+  min-width: 2.75rem;
+  text-align: right;
+}
+
+/* A thin line the width of the row, filled up to the thumb. --fill is set by
+   the component, because a gradient cannot read the input's value. */
+.set-slider input[type='range'] {
+  appearance: none;
+  background:
+    linear-gradient(
+        to right,
+        var(--accent) 0 var(--fill, 50%),
+        var(--border) var(--fill, 50%) 100%
+      )
+      center / 100% 2px no-repeat;
+  block-size: var(--set-row);
+  margin: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+/* Square. Nothing else in this application is round, and a circle here would
+   be the only one. Repeated for the two prefixes because a selector list
+   containing one vendor pseudo-element is dropped whole by the engine that
+   does not know it. */
+.set-slider input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  background: var(--accent);
+  block-size: 0.75rem;
+  border: 0;
+  border-radius: 0;
+  inline-size: 0.75rem;
+}
+
+.set-slider input[type='range']::-moz-range-thumb {
+  background: var(--accent);
+  block-size: 0.75rem;
+  border: 0;
+  border-radius: 0;
+  inline-size: 0.75rem;
+}
+
+.set-slider input[type='range']::-moz-range-track {
+  background: none;
+}
+
+.set-check input[type='checkbox'] {
+  justify-self: start;
+}
+
+/* One segmented control rather than three radios in a row: the choice is one
+   of three states of the same thing, and three separate dots read as three
+   separate questions. The inputs are still radios — arrow keys, the group,
+   the labels — and only the labels are painted. */
+.set-choice {
+  border: 1px solid var(--border-input);
+  display: grid;
+  grid-auto-columns: 1fr;
+  grid-auto-flow: column;
+}
+
+.set-segment {
+  cursor: pointer;
+  font-size: var(--small);
+  padding: calc(var(--gap) / 2) 0;
+  text-align: center;
+}
+
+.set-segment + .set-segment {
+  border-left: 1px solid var(--border-input);
+}
+
+/* The radio itself is off-screen rather than display:none, which would take
+   it out of the tab order and out of the accessibility tree with it. */
+.set-choice input[type='radio'] {
+  block-size: 1px;
+  clip-path: inset(50%);
+  inline-size: 1px;
+  margin: 0;
+  position: absolute;
+  white-space: nowrap;
+}
+
+.set-segment:has(:checked) {
+  background: var(--accent);
+  /* --card, not --paper: the panel's own light, never the book's. A reader who
+     sets black paper must still be able to read this. */
+  color: var(--card);
+}
+
+.set-segment:has(:focus-visible) {
+  outline: 2px solid var(--text);
+  outline-offset: -2px;
+}
+
+.set-colour {
+  display: grid;
+  gap: calc(var(--gap) / 2);
+  padding-top: calc(var(--gap) / 2);
+}
+
+/* Eight in a row: a row of colours is read at a glance, and a grid of them is
+   read one at a time. Its own name rather than .swatch, which the class
+   menu's colour picker already owns — one block under that name was
+   restyling both. */
+.set-swatches {
+  display: flex;
+  gap: calc(var(--gap) / 2);
+}
+
+.set-swatch {
+  block-size: 1.25rem;
+  border: 1px solid var(--border-input);
+  flex: 1;
+  padding: 0;
+}
+
+.set-swatch[aria-pressed='true'] {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.set-row {
+  display: flex;
+  gap: var(--gap);
+}
+
+.set-hex,
+.set-picker,
+.set-select {
+  block-size: var(--set-row);
+}
+
+.set-hex {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--small);
+  min-width: 0;
+}
+
+.set-picker {
+  border: 1px solid var(--border-input);
+  flex: none;
+  inline-size: var(--set-row);
+  padding: 2px;
+}
+
+/* The last native control in the panel, and now the only thing that gave it
+   away as a dialog from another application. The chevron is two triangles
+   rather than an image: no file to fetch and no colour that is not a token. */
+.set-select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%) right 0.85rem
+      center / 5px 5px no-repeat,
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%) right 0.55rem
+      center / 5px 5px no-repeat;
+  border: 1px solid var(--border-input);
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  font-size: var(--small);
+  padding: 0 calc(var(--gap) * 3) 0 calc(var(--gap) / 2);
+  width: 100%;
+}
+
+/* Quiet, and not red: this is information, not a refusal. Nothing above it is
+   disabled and nothing is blocked — a faint watermark is a thing somebody may
+   actually want, and only they know. */
+.set-warning {
+  color: var(--text-muted);
+  font-size: var(--small);
+  margin: 0;
+}
+
+/* Bordered rather than filled, and not --danger: the settings it clears are
+   twelve values a reader can set again, not work that is gone. It should read
+   as the end of the panel, not as a warning in it. */
+.set-reset {
+  border: 1px solid var(--border-input);
+  color: var(--text);
+  font-size: var(--small);
+  justify-self: start;
+  padding: calc(var(--gap) / 2) var(--gap);
+}
+
+.set-reset:hover {
+  background: var(--raised);
+}
+
+/* Under the stack and lined up with it: a sheet's width, so the button inside
+   can take the paper's own margins and read as the next place to write rather
+   than as a control off to one side of the pane. */
+.book-foot {
+  margin: 0 auto calc(var(--gap) * 8);
+  max-width: calc(38em + var(--gap) * 21);
 }
 
 .book-add {
   border: 0;
   color: var(--text-muted);
+  display: block;
   font-size: var(--small);
-  margin: 0 0 calc(var(--gap) * 8);
-  padding: var(--gap) calc(var(--margin) + var(--gap) * 3);
-  width: auto;
+  margin: 0;
+  padding: var(--gap) var(--sheet-edge) var(--gap) var(--sheet-margin);
+  text-align: left;
+  width: 100%;
 }

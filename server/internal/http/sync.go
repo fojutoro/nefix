@@ -1,7 +1,9 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -30,6 +32,11 @@ var visibilities = []string{"private", "faculty", "public"}
 // constraint failure that reads as a server fault and stops the client's sync
 // dead.
 var notebookKinds = []string{"notes", "collegebook"}
+
+// The cap on a notebook's settings blob. Generous for a few dozen appearance
+// keys and small enough that the column cannot become a file store, which is
+// the one thing an opaque TEXT column invites.
+const maxSettings = 4096
 
 // What a client may send. The server owns seq, version arithmetic and the
 // timestamps, so none of them are fields here except the version the client
@@ -73,7 +80,14 @@ type pushNotebook struct {
 	IsGeneral bool    `json:"is_general"`
 	// 'notes' or 'collegebook'. Absent is 'notes': a client that predates
 	// collegebooks sends no kind at all and must keep syncing.
-	Kind      string  `json:"kind"`
+	Kind string `json:"kind"`
+	// The client's appearance settings for this book, as JSON text. A string
+	// and not a nested object: the client is the only thing that reads these,
+	// and decoding them here into a map would reorder the keys and drop any
+	// this version has never heard of, so a newer client's book would come
+	// back from an older server with its settings quietly mangled. As text
+	// the bytes are returned exactly as they arrived. Absent is null.
+	Settings  *string `json:"settings"`
 	Version   int64   `json:"version"`
 	DeletedAt *string `json:"deleted_at"`
 }
@@ -139,6 +153,7 @@ type notebookResponse struct {
 	Name      string     `json:"name"`
 	IsGeneral bool       `json:"is_general"`
 	Kind      string     `json:"kind"`
+	Settings  *string    `json:"settings"`
 	Version   int64      `json:"version"`
 	Seq       int64      `json:"seq"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -195,6 +210,7 @@ func newNotebookResponse(n *store.Notebook) *notebookResponse {
 		Name:      n.Name,
 		IsGeneral: n.IsGeneral,
 		Kind:      n.Kind,
+		Settings:  n.Settings,
 		Version:   n.Version,
 		Seq:       n.Seq,
 		CreatedAt: n.CreatedAt,
@@ -347,6 +363,21 @@ func (n *pushNotebook) validate() (store.NotebookInput, string) {
 	if n.Kind != "" && !slices.Contains(notebookKinds, n.Kind) {
 		return store.NotebookInput{}, subject + ": kind must be notes or collegebook"
 	}
+	// Two rules, and deliberately no third. The shape of the blob is the
+	// client's business — a future version will put keys in here this server
+	// has never heard of, and validating them would break that client's sync
+	// rather than degrade it. What is checked is that the column cannot be
+	// used as unbounded storage, and that bytes which no reader could parse
+	// are named now rather than failing on every device that pulls them.
+	if n.Settings != nil {
+		if len(*n.Settings) > maxSettings {
+			return store.NotebookInput{}, fmt.Sprintf(
+				"%s: settings must be at most %d bytes", subject, maxSettings)
+		}
+		if !json.Valid([]byte(*n.Settings)) {
+			return store.NotebookInput{}, subject + ": settings must be valid JSON"
+		}
+	}
 
 	deletedAt, message := optionalTime(n.DeletedAt, "deleted_at", subject)
 	if message != "" {
@@ -359,6 +390,7 @@ func (n *pushNotebook) validate() (store.NotebookInput, string) {
 		Name:      n.Name,
 		IsGeneral: n.IsGeneral,
 		Kind:      n.Kind,
+		Settings:  n.Settings,
 		Version:   n.Version,
 		DeletedAt: deletedAt,
 	}, ""
