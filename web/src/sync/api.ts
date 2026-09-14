@@ -57,6 +57,11 @@ export type PushNotebook = {
   name: string
   is_general: boolean
   kind: 'notes' | 'collegebook'
+  // A collegebook's appearance, as JSON text rather than a nested object. The
+  // server stores these bytes without reading them, and sending an object
+  // would mean this client re-encoding the blob on every push and dropping
+  // any key a newer client put in it. Null is a book that has set nothing.
+  settings: string | null
   version: number
   deleted_at: string | null
 }
@@ -128,6 +133,24 @@ function csrfToken(): string | null {
   return null
 }
 
+// Generous for a push of a hundred rows over a slow connection, and short
+// enough that a stall reads as a stall rather than as silence. Per request
+// rather than per cycle: a pull of twenty pages is twenty requests, and each
+// of them either answers or gives up on its own.
+export const REQUEST_TIMEOUT_MS = 30_000
+
+// Rejects when the signal does. fetch aborts on a signal of its own accord, so
+// this is belt and braces — but a service worker sits between this module and
+// the network in a PWA, and the failure being prevented is sync stopping for
+// ever. That is not a guarantee worth leaving to someone else's cooperation.
+function aborts(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason as Error), {
+      once: true,
+    })
+  })
+}
+
 export async function send(
   path: string,
   init?: RequestInit,
@@ -155,12 +178,43 @@ export async function send(
   // Only the transport is guarded. fetch rejects when the request never
   // arrived; every HTTP status resolves, so a 500 read as "offline" would
   // have the UI blame the network for the server.
+  //
+  // The deadline is the other half of that. fetch does not reject on a
+  // connection that hangs open, because nothing has failed — and a sync cycle
+  // that never returns holds its guard, leaves the status on 'syncing' and
+  // stops every later cycle for the life of the tab. One stalled request
+  // otherwise ends syncing permanently, with no symptom but an indicator that
+  // never changes.
+  const deadline = new AbortController()
+  const timer = setTimeout(
+    () =>
+      deadline.abort(
+        new DOMException(`${path}: no answer in ${REQUEST_TIMEOUT_MS}ms`, 'TimeoutError'),
+      ),
+    REQUEST_TIMEOUT_MS,
+  )
   try {
-    response = await fetch(path, { credentials: 'include', ...init, headers })
+    response = await Promise.race([
+      fetch(path, {
+        credentials: 'include',
+        ...init,
+        headers,
+        signal: deadline.signal,
+      }),
+      aborts(deadline.signal),
+    ])
   } catch (error) {
+    // Deliberately the same error a dropped network produces. An abort is a
+    // request that did not arrive, the caller already handles that, and a new
+    // type here would be one nobody catches — which is the shape of the bug
+    // this whole deadline exists to close.
     throw new OfflineError(
       error instanceof Error ? error.message : 'network unreachable',
     )
+  } finally {
+    // Or a deadline for a request that answered would fire later and abort an
+    // unrelated one.
+    clearTimeout(timer)
   }
 
   if (!response.ok) {
@@ -196,4 +250,13 @@ export async function pull(
     limit: String(limit),
   })
   return (await send(`/api/v1/sync/pull?${query}`)) as PullResponse
+}
+
+export type Health = { status: string; version: string; commit: string }
+
+// What build is actually answering. Outside the session, so it works whether
+// or not anyone is signed in, which is the state a report most often comes
+// from.
+export async function health(): Promise<Health> {
+  return (await send('/health')) as Health
 }

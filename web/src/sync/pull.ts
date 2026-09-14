@@ -1,5 +1,6 @@
 import { db } from '../db/schema.ts'
 import { pull, type PullResponse } from './api.ts'
+import { notePull } from './debug.ts'
 import { fromWire, fromWireClass, fromWireNotebook } from './push.ts'
 import type { PullSummary } from './state.ts'
 
@@ -72,18 +73,27 @@ async function applyPage(response: PullResponse): Promise<number> {
 export async function pullRemoteChanges(): Promise<PullSummary> {
   const summary: PullSummary = { applied: 0, skipped: 0, pages: 0 }
   let since = await readCursor()
+  // The cursor this run started from, for the debug panel: a client stuck on
+  // a wrong cursor pulls nothing for ever and looks exactly like a server
+  // with nothing to give.
+  const cursorBefore = since
+  const received = { classes: 0, notebooks: 0, notes: 0 }
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const response = await pull(since, PAGE)
     const applied = await applyPage(response)
-    const received =
+    const rows =
       response.classes.length +
       response.notebooks.length +
       response.notes.length
+    received.classes += response.classes.length
+    received.notebooks += response.notebooks.length
+    received.notes += response.notes.length
     summary.applied += applied
-    summary.skipped += received - applied
+    summary.skipped += rows - applied
     summary.pages += 1
     since = response.cursor
     if (!response.has_more) break
   }
+  notePull({ ...received, ...summary, cursorBefore, cursorAfter: since })
   return summary
 }

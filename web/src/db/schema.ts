@@ -72,6 +72,11 @@ export type Notebook = {
   // and one sync type on purpose: a page is a note with an order, and nothing
   // below this line needs to know the difference.
   kind: 'notes' | 'collegebook'
+  // A collegebook's appearance, as the JSON text the server stores, and null
+  // for a book that has set nothing. Text rather than a parsed object so that
+  // keys written by a newer client survive being read and written here — see
+  // db/settings.ts, which is the only thing that looks inside it.
+  settings: string | null
   createdAt: string
   updatedAt: string
   deletedAt: string | null
@@ -171,6 +176,27 @@ export function declareSchema(db: Dexie): void {
         note.pageOrder = null
       })
   })
+
+  // No new index and no new store: settings are read with the notebook they
+  // belong to and are never queried on. The column rides the existing
+  // notebook sync, so there is no new wire type and no cursor change either.
+  db.version(6).upgrade((tx) =>
+    // Null, not a blob of the current defaults. Null means "this book has set
+    // nothing", which is what these books have done, and it is what lets a
+    // later change to the defaults reach them. Writing defaults in here would
+    // freeze today's appearance onto every book that ever existed.
+    //
+    // Deleted rows too, for the reason v4 and v5 backfilled theirs: a restore
+    // brings one back, and it would otherwise return with the field undefined
+    // — a value no filter matches. The write leaves dirty alone, so this does
+    // not queue a push of every notebook on the device.
+    tx
+      .table<Notebook>('notebooks')
+      .toCollection()
+      .modify((notebook) => {
+        notebook.settings = null
+      }),
+  )
 }
 
 export const db = new Dexie('nefix') as Dexie & {

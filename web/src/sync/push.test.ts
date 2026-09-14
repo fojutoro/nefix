@@ -13,6 +13,7 @@ import type {
   WireNotebook,
   WireNote,
 } from './api.ts'
+import { OfflineError, REQUEST_TIMEOUT_MS } from './api.ts'
 import { pushDirtyRows } from './push.ts'
 import { syncState } from './state.ts'
 
@@ -397,6 +398,7 @@ describe('pushing classes and notebooks', () => {
           name: 'Renamed on the other device',
           is_general: true,
           kind: 'notes' as const,
+          settings: null,
           version: 5,
           seq: 9,
           created_at: local.createdAt,
@@ -487,6 +489,7 @@ describe('pushing classes and notebooks', () => {
         name: `notebook ${index}`,
         isGeneral: false,
         kind: 'notes' as const,
+        settings: null,
         createdAt: now,
         updatedAt: now,
         deletedAt: null,
@@ -504,5 +507,107 @@ describe('pushing classes and notebooks', () => {
     // The note travels with the first request rather than waiting for the
     // notebooks to drain.
     expect(sent.map((body) => body.notes.length)).toEqual([1, 0])
+  })
+})
+
+describe('a collegebook\'s settings', () => {
+  it('rides the notebook sync out and back, unknown keys and all', async () => {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+    const notebook = (await db.notebooks.toArray())[0]!
+    // Written by a newer client: one key this version reads and one it has
+    // never heard of. Both have to survive a round trip through this one.
+    const blob = '{"ruling":"squared","marginDoodles":"sunflowers"}'
+    await db.notebooks.update(notebook.id, { settings: blob, dirty: true })
+
+    const sent = serveRows(acceptEverything)
+    await pushDirtyRows()
+
+    // Out: the text as stored, not a re-encoding of the keys this client
+    // knows, which would drop the one it does not.
+    expect(sent[0]!.notebooks[0]!.settings).toBe(blob)
+    // And back: the row the server returned is written locally intact.
+    expect((await db.notebooks.get(notebook.id))?.settings).toBe(blob)
+    expect((await db.notebooks.get(notebook.id))?.dirty).toBe(false)
+    expect(created.id).toBe(notebook.classId)
+  })
+
+  it('sends null for a book that has set nothing', async () => {
+    await createClass({ name: 'Diskrétna matematika' })
+    const sent = serveRows(acceptEverything)
+    await pushDirtyRows()
+    expect(sent[0]!.notebooks[0]!.settings).toBeNull()
+  })
+})
+
+describe('a request that never answers', () => {
+  // The failure this exists to prevent: fetch does not reject on a connection
+  // that hangs open, because nothing failed. pushDirtyRows had already set
+  // 'syncing' and taken its guard, so without a deadline the status stayed
+  // 'syncing' for ever and every later cycle returned having sent nothing.
+  // One hung request stopped sync permanently, and the only symptom was an
+  // indicator that never changed.
+  it('times out, leaves syncing, and lets the next cycle send again', async () => {
+    // setTimeout only, and still advancing on its own: fake-indexeddb
+    // schedules on setTimeout, so freezing it stalls every Dexie read this
+    // makes and the request is never even sent. Advancing lets those run at
+    // real speed while the thirty seconds below are still a jump rather than
+    // a wait.
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout'],
+      shouldAdvanceTime: true,
+      advanceTimeDelta: 1,
+    })
+    try {
+      await createNote({ title: 'Množiny', bodyMd: 'text' })
+
+      // A connection that hangs open. fetch does not reject on this, which is
+      // the entire problem: there is no failure for it to report.
+      const hung = vi.fn(() => new Promise<Response>(() => {}))
+      vi.stubGlobal('fetch', hung)
+
+      const run = pushDirtyRows()
+      await vi.waitFor(() => expect(hung).toHaveBeenCalled())
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1)
+      await run
+
+      expect(hung).toHaveBeenCalledTimes(1)
+      // An abort arrives as the error a dropped network already produces, so
+      // every caller that handles one handles this. A new error type here
+      // would be a type nobody catches.
+      expect(syncState.current.lastError).toBeInstanceOf(OfflineError)
+      // Out of 'syncing', which is what the indicator was stuck on.
+      expect(syncState.current.status).toBe('offline')
+
+      // The assertion that matters. Reporting an error is not recovering from
+      // one: if the guard leaked, this call returns immediately having sent
+      // nothing, and sync is over for the life of the tab.
+      const sent = serve(accept)
+      const summary = await pushDirtyRows()
+      expect(sent).toHaveLength(1)
+      expect(summary.pushed).toBe(1)
+      expect((await db.notes.toArray())[0]?.dirty).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the deadline when the request answers in time', async () => {
+    vi.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout'],
+      shouldAdvanceTime: true,
+      advanceTimeDelta: 1,
+    })
+    try {
+      await createNote({ title: 'Množiny', bodyMd: 'text' })
+      serve(accept)
+      await pushDirtyRows()
+
+      // A deadline left armed for a request that answered would fire later
+      // and abort an unrelated one.
+      expect(vi.getTimerCount()).toBe(0)
+      expect(syncState.current.status).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

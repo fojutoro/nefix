@@ -60,6 +60,7 @@ const remoteNotebook = (over: Partial<WireNotebook> = {}): WireNotebook => ({
   class_id: '0192f0b1-3c4d-7e8f-9a0b-1c2d3e4f5a6b',
   name: 'Prednášky',
   is_general: true,
+  settings: null,
   kind: 'notes',
   version: 1,
   seq: 11,

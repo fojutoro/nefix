@@ -259,6 +259,7 @@ The notebook object:
 { "id": "0192f0c1-3c4d-7e8f-9a0b-1c2d3e4f5a6b",
   "class_id": "0192f0b1-3c4d-7e8f-9a0b-1c2d3e4f5a6b",
   "name": "Prednášky", "is_general": true, "kind": "notes",
+  "settings": "{\"ruling\":\"squared\",\"pitch\":1.75}",
   "version": 1, "seq": 13,
   "created_at": "2026-08-05T09:30:00Z", "updated_at": "2026-08-05T09:30:00Z",
   "deleted_at": null }
@@ -282,6 +283,22 @@ and no second sync path.
 Any other value is a 400. The column carries no CHECK constraint, so that
 a kind from a future client is refused here, with a message naming the row,
 rather than failing a constraint and reading as a server fault.
+
+`settings` is the client's appearance settings for a collegebook — ruling,
+margin rule, paper, text — and null means the client uses its own defaults.
+It is **a JSON string, not a nested object**, and the server stores and
+returns those bytes unchanged. It does not parse them, has no schema for
+them, and will hand back keys it has never heard of exactly as they were
+sent: a newer client's book must survive a round trip through an older
+server, and decoding into an object here would reorder its keys and drop
+the ones this version does not know.
+
+Two rules only. The string must be at most **4096 bytes** and must be
+valid JSON; either failure is a 400 naming the notebook. The first stops
+an opaque column becoming a file store, and the second names bytes no
+reader could parse here rather than letting them fail on every device that
+pulls them afterwards. A client that predates settings sends no field and
+keeps syncing: absent is null.
 
 The note object:
 
@@ -416,7 +433,7 @@ client's rule, not this endpoint's.
 | Status | Body | When |
 |--------|------|------|
 | 200 | results | the batch was processed, whatever each row's outcome |
-| 400 | error | a row in any array is malformed: a bad id, a `class_id` or `notebook_id` that is not a UUID, an unknown `visibility`, an unknown notebook `kind`, a title or name over 200 characters, a negative `version`, or an `archived_at` or `deleted_at` that is not RFC 3339. Nothing is written; the message names the row |
+| 400 | error | a row in any array is malformed: a bad id, a `class_id` or `notebook_id` that is not a UUID, an unknown `visibility`, an unknown notebook `kind`, notebook `settings` over 4096 bytes or not valid JSON, a title or name over 200 characters, a negative `version`, or an `archived_at` or `deleted_at` that is not RFC 3339. Nothing is written; the message names the row |
 | 401 | error | `authentication required` |
 | 403 | error | missing or invalid `X-CSRF-Token` |
 | 413 | error | over 100 rows in any one array, or over 1 MB; the message names the array |

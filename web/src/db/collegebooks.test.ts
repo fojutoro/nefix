@@ -46,6 +46,38 @@ describe('createCollegebook', () => {
     })
   })
 
+  it('opens the first page on the book\'s name, as an ordinary heading', async () => {
+    const book = await createCollegebook('Diskrétna matematika', null)
+
+    const pages = await listPages(book.id)
+    // The markdown, not the rendered DOM: this is what the transaction wrote
+    // and what syncs. The trailing blank line is the paragraph the user types
+    // into, under the heading.
+    expect(pages[0]!.bodyMd).toBe('# Diskrétna matematika\n\n')
+  })
+
+  it('gives a page made later an empty body', async () => {
+    const book = await createCollegebook('Prednášky', null)
+    const second = await createPage(book.id)
+
+    // Only the first page of a fresh book opens on a title.
+    expect(second.bodyMd).toBe('')
+    expect((await listPages(book.id))[1]!.bodyMd).toBe('')
+  })
+
+  it('leaves a collegebook that already exists alone', async () => {
+    // A book from before the title existed: its first page is empty, and
+    // nothing backfills it. There is no migration here and there is not meant
+    // to be one.
+    const book = await createNotebook('Prednášky', null)
+    await db.notebooks.update(book.id, { kind: 'collegebook' })
+    const first = await createPage(book.id)
+
+    await createPage(book.id)
+
+    expect((await db.notes.get(first.id))?.bodyMd).toBe('')
+  })
+
   it('leaves neither behind when the page cannot be written', async () => {
     // Fails after the notebook is added and while the page is being written,
     // which is the only window where half a collegebook could survive.

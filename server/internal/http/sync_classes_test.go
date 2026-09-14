@@ -546,3 +546,97 @@ func TestOrdinaryNoteCarriesANullPageOrder(t *testing.T) {
 		t.Errorf("page_order = %v, want null", got.Results[0].Note)
 	}
 }
+
+// The column is opaque storage for the client's own appearance settings. The
+// server holds the bytes and hands them back; it does not read them. So the
+// only test that matters is that what comes back is what went in, character
+// for character — a server that decoded the blob and re-encoded it would
+// reorder keys and silently drop any this version has never heard of.
+func TestNotebookSettingsRoundTripByteIdentical(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	// Deliberately unsorted, oddly spaced, and carrying a key no version of
+	// this server knows.
+	const blob = `{"z_unknown":[1,2,{"deep":true}],"ruling":"squared","pitch":1.75}`
+	notebook := notebookPayload(notebookSyncID(1), classSyncID(1), 0)
+	notebook["settings"] = blob
+
+	got := pushRows(t, api, cookie, map[string]any{"notebooks": []any{notebook}})
+	if got.Results[0].Notebook == nil {
+		t.Fatalf("no notebook came back: %+v", got.Results[0])
+	}
+	if got.Results[0].Notebook.Settings == nil {
+		t.Fatalf("settings came back null")
+	}
+	if *got.Results[0].Notebook.Settings != blob {
+		t.Errorf("push echoed\n %s\nwant\n %s", *got.Results[0].Notebook.Settings, blob)
+	}
+
+	pulled := pullNotes(t, api, cookie, "?since=0")
+	if len(pulled.Notebooks) != 1 {
+		t.Fatalf("notebooks = %d, want 1", len(pulled.Notebooks))
+	}
+	if pulled.Notebooks[0].Settings == nil || *pulled.Notebooks[0].Settings != blob {
+		t.Errorf("pull returned %v, want %s", pulled.Notebooks[0].Settings, blob)
+	}
+}
+
+// A client that predates settings sends no such field, and it must keep
+// syncing. Absent is null, never a 400.
+func TestPushTreatsAbsentNotebookSettingsAsNull(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	got := pushRows(t, api, cookie, map[string]any{
+		"notebooks": []any{notebookPayload(notebookSyncID(1), classSyncID(1), 0)},
+	})
+	if got.Results[0].Notebook == nil || got.Results[0].Notebook.Settings != nil {
+		t.Errorf("settings = %v, want null", got.Results[0].Notebook)
+	}
+}
+
+func TestPushRejectsOversizedNotebookSettings(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	// Valid JSON, one byte over the cap. The cap exists so one book cannot
+	// carry a megabyte of anything through a column nothing validates.
+	padding := strings.Repeat("x", maxSettings)
+	notebook := notebookPayload(notebookSyncID(1), classSyncID(1), 0)
+	notebook["settings"] = `{"pad":"` + padding + `"}`
+
+	rec := call(t, api, http.MethodPost, "/api/v1/sync/push",
+		map[string]any{"notebooks": []any{notebook}}, cookie)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusBadRequest, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), notebookSyncID(1)) {
+		t.Errorf("body %s does not name the notebook", rec.Body)
+	}
+
+	pulled := pullNotes(t, api, cookie, "?since=0")
+	if len(pulled.Notebooks) != 0 {
+		t.Errorf("notebooks = %d, want 0 after a refused push", len(pulled.Notebooks))
+	}
+}
+
+// Valid JSON is the one thing checked, because a blob that is not JSON is a
+// client bug this server can name now rather than a parse failure on every
+// other device that pulls it later.
+func TestPushRejectsNotebookSettingsThatAreNotJSON(t *testing.T) {
+	api := newAPI(t)
+	cookie := signUp(t, api, "jozef", "jozef@example.sk")
+
+	notebook := notebookPayload(notebookSyncID(1), classSyncID(1), 0)
+	notebook["settings"] = "{ruling:"
+
+	rec := call(t, api, http.MethodPost, "/api/v1/sync/push",
+		map[string]any{"notebooks": []any{notebook}}, cookie)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusBadRequest, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), notebookSyncID(1)) {
+		t.Errorf("body %s does not name the notebook", rec.Body)
+	}
+}

@@ -304,3 +304,56 @@ func TestUpsertNotebookRoundTripsKind(t *testing.T) {
 		t.Errorf("kind read back = %q, want collegebook", read.Kind)
 	}
 }
+
+// Opaque bytes: the store writes what it is handed and reads it back. NULL is
+// the absence of settings and is what every notebook that existed before this
+// column has, which is why the column is nullable and nothing backfills it.
+func TestUpsertNotebookRoundTripsSettingsAndDefaultsToNull(t *testing.T) {
+	db := openTemp(t)
+	ctx := context.Background()
+	user := createUser(t, db, "jozef", "jozef@example.sk")
+
+	plain, err := db.UpsertNotebook(ctx, user.ID, notebookInput(notebookID(1)))
+	if err != nil {
+		t.Fatalf("UpsertNotebook: %v", err)
+	}
+	if plain.Settings != nil {
+		t.Errorf("settings = %v, want nil on a notebook that set none", *plain.Settings)
+	}
+
+	const blob = `{"z":1,"a":{"b":[true,null]}}`
+	withSettings := notebookInput(notebookID(2))
+	withSettings.Settings = strptr(blob)
+	saved, err := db.UpsertNotebook(ctx, user.ID, withSettings)
+	if err != nil {
+		t.Fatalf("UpsertNotebook: %v", err)
+	}
+	if saved.Settings == nil || *saved.Settings != blob {
+		t.Fatalf("settings = %v, want %s", saved.Settings, blob)
+	}
+
+	// And an update carries them, rather than the column surviving only the
+	// insert path.
+	next := notebookInput(notebookID(2))
+	next.Version = 1
+	next.Settings = strptr(`{"z":2}`)
+	updated, err := db.UpsertNotebook(ctx, user.ID, next)
+	if err != nil {
+		t.Fatalf("UpsertNotebook: %v", err)
+	}
+	if updated.Settings == nil || *updated.Settings != `{"z":2}` {
+		t.Fatalf("settings = %v, want {\"z\":2}", updated.Settings)
+	}
+
+	// Clearing is sending null, which is how "reset to defaults" reaches the
+	// server: the blob goes away rather than becoming a blob of defaults.
+	cleared := notebookInput(notebookID(2))
+	cleared.Version = 2
+	back, err := db.UpsertNotebook(ctx, user.ID, cleared)
+	if err != nil {
+		t.Fatalf("UpsertNotebook: %v", err)
+	}
+	if back.Settings != nil {
+		t.Errorf("settings = %v, want nil after a reset", *back.Settings)
+	}
+}

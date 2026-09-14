@@ -25,6 +25,8 @@ import {
   createCollegebook,
   listCollegebooks,
   listNotebooks,
+  resetBookSettings,
+  updateBookSettings,
 } from './db/notebooks.ts'
 import {
   RAIL_DEFAULT,
@@ -40,6 +42,7 @@ import {
   createPage,
   deleteNote,
   listPages,
+  observeDirtyCount,
   readLastNoteId,
   updateNote,
   writeLastNoteId,
@@ -56,11 +59,13 @@ import {
   TODAY,
   type Selection,
 } from './features/classes/selection.ts'
+import { readSettings, type BookSettings } from './db/settings.ts'
 import Collegebook from './features/notes/Collegebook.tsx'
+import SyncDot from './features/sync/SyncDot.tsx'
 import Editor from './features/notes/Editor.tsx'
 import { searchNotes } from './features/notes/search.ts'
 import { useAutosave } from './features/notes/useAutosave.ts'
-import { logout, me } from './sync/auth.ts'
+import { logout, me, type User } from './sync/auth.ts'
 import { sync as runSync } from './sync/index.ts'
 import { useSyncState } from './sync/state.ts'
 
@@ -72,16 +77,6 @@ const INTERVAL_MS = 10_000
 // interval can land on top of them. sync()'s guard stops two runs overlapping
 // but not the second pointless round trip.
 const DEBOUNCE_MS = 2_000
-
-// Coarse on purpose: the line re-renders when a sync ends, not on a timer, so
-// a minute is the finest unit it can keep honest.
-function relative(at: number, language: string): string {
-  const seconds = Math.round((at - Date.now()) / 1000)
-  const format = new Intl.RelativeTimeFormat(language, { numeric: 'auto' })
-  if (seconds > -60) return format.format(seconds, 'second')
-  if (seconds > -3600) return format.format(Math.round(seconds / 60), 'minute')
-  return format.format(Math.round(seconds / 3600), 'hour')
-}
 
 // Guarded, because autosave fires twice a second while someone is typing and
 // this value changes only when they move to another class. At module scope
@@ -101,8 +96,14 @@ function remember(
 // crossfade has something to fade out of: nothing animates on load.
 let painted = false
 
-function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
-  const { t, i18n } = useTranslation()
+function Workspace({
+  account,
+  onSignedOut,
+}: {
+  account: User | null
+  onSignedOut: () => void
+}) {
+  const { t } = useTranslation()
   // null until the first read finishes, so the empty state is not shown to
   // someone who simply has a slow disk.
   const [notes, setNotes] = useState<Note[] | null>(null)
@@ -138,6 +139,16 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
   const [focusEditor, setFocusEditor] = useState(false)
   const [online, setOnline] = useState(() => navigator.onLine)
   const sync = useSyncState()
+  // Live, because a keystroke that makes a row dirty has to turn the dot
+  // yellow and nothing on the write path knows the dot is there.
+  const [pending, setPending] = useState(0)
+  useEffect(() => {
+    const watch = observeDirtyCount().subscribe({
+      next: setPending,
+      error: () => setPending(0),
+    })
+    return () => watch.unsubscribe()
+  }, [])
 
   const selected = notes?.find((note) => note.id === selectedId) ?? null
 
@@ -254,10 +265,6 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
     [refresh, refreshBooks, refreshPages],
   )
 
-  const refreshRef = useRef(refreshAll)
-  useEffect(() => {
-    refreshRef.current = refreshAll
-  }, [refreshAll])
 
   // The last class written in, guarded against a write per autosave.
   const written = useRef<string | null>(null)
@@ -279,6 +286,24 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
       }),
     [],
   )
+
+  // Everything a landed pull can change on screen, which is more than the
+  // content pane: a collegebook's appearance lives on its notebook row, and
+  // the open book is drawn from the rail's read of those rows. refreshAll
+  // cannot simply include it — refreshAll's identity changes on every
+  // keystroke in the search box, and re-reading every notebook per character
+  // is exactly what the ref above exists to avoid. Sync is debounced to two
+  // seconds and this runs only when something actually arrived, so the extra
+  // read is proportionate here and nowhere else.
+  const refreshSynced = useCallback(
+    () => Promise.all([refreshAll(), refreshRail()]),
+    [refreshAll, refreshRail],
+  )
+
+  const refreshRef = useRef(refreshSynced)
+  useEffect(() => {
+    refreshRef.current = refreshSynced
+  }, [refreshSynced])
 
   const classOfNotebook = useMemo(
     () => new Map(notebooks.map((row) => [row.id, row.classId])),
@@ -331,7 +356,8 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
       last = now
       void runSync().then((summary) => {
         // A pull that lands notes the list never shows is, to the user, a
-        // pull that did not happen.
+        // pull that did not happen. The same is true of a notebook row: a
+        // book whose appearance arrived and is not drawn has not arrived.
         if (summary.changed) return refreshRef.current()
       })
     }
@@ -465,6 +491,32 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
     setChosen({ kind: 'class', classId: created.id })
   }
 
+  // Per book, read off the row the rail already holds. A book with no blob
+  // gets the defaults, and a blob it cannot parse gets them too rather than
+  // taking the book down with it.
+  const bookSettings = useMemo(
+    () =>
+      readSettings(
+        notebooks.find((row) => row.id === openBookId)?.settings ?? null,
+      ),
+    [notebooks, openBookId],
+  )
+
+  // refreshRail re-reads the notebooks, which is what the page renders from,
+  // so the sheet changes under the control as it moves. There is no apply
+  // button because there is nowhere for a pending value to wait.
+  const changeSettings = async (patch: Partial<BookSettings>) => {
+    if (openBookId === null) return
+    await updateBookSettings(openBookId, patch)
+    await refreshRail()
+  }
+
+  const clearSettings = async () => {
+    if (openBookId === null) return
+    await resetBookSettings(openBookId)
+    await refreshRail()
+  }
+
   const addBook = async (name: string) => {
     if (selection.kind !== 'class') return
     const book = await createCollegebook(name, selection.classId)
@@ -544,20 +596,6 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
     onSignedOut()
   }
 
-  // navigator.onLine leads, because it reports the loss before a request has
-  // to fail to discover it.
-  let syncLine
-  if (!online || sync.status === 'offline') syncLine = t('sync.offline')
-  else if (sync.status === 'syncing') syncLine = t('sync.syncing')
-  else if (sync.status === 'unauthenticated') syncLine = t('sync.signIn')
-  else if (sync.status === 'error') syncLine = t('sync.error')
-  else if (sync.lastSyncedAt === null) syncLine = t('sync.never')
-  else {
-    syncLine = t('sync.lastSynced', {
-      when: relative(sync.lastSyncedAt, i18n.language),
-    })
-  }
-
   const shelf =
     selection.kind === 'class'
       ? [...(classes ?? []), ...archived].find(
@@ -611,6 +649,9 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
           untitled={t('notes.untitled')}
           save={save}
           onCreatePage={() => void create()}
+          settings={bookSettings}
+          onSettings={(patch) => void changeSettings(patch)}
+          onResetSettings={() => void clearSettings()}
         />
       </div>
     )
@@ -727,22 +768,18 @@ function Workspace({ onSignedOut }: { onSignedOut: () => void }) {
             </button>
           </p>
         )}
-        <p className="offline" role="status">
-          {syncLine}
-        </p>
+        {/* The whole footer. The message that used to live here rewrote
+            itself every few seconds in the corner of the eye of someone
+            writing, and said both too little and too much; the sign-out and
+            the language switch moved into the panel behind the dot. */}
         <div className="side-actions">
-          <button
-            type="button"
-            className="language"
-            onClick={() =>
-              void i18n.changeLanguage(i18n.language === 'sk' ? 'en' : 'sk')
-            }
-          >
-            {t('app.switchLanguage')}
-          </button>
-          <button type="button" onClick={() => void signOut()}>
-            {t('auth.signOut')}
-          </button>
+          <SyncDot
+            account={account}
+            sync={sync}
+            online={online}
+            pending={pending}
+            onSignOut={() => void signOut()}
+          />
         </div>
       </div>
       <RailHandle
@@ -772,10 +809,18 @@ type Gate = 'checking' | 'in' | 'out'
 
 export default function App() {
   const [gate, setGate] = useState<Gate>('checking')
+  // Kept rather than discarded: the account panel names who is signed in, and
+  // me() is the only thing that ever knew. Null on the offline path below,
+  // where there is a session but no answer about it — the panel says what it
+  // has, which is nothing.
+  const [account, setAccount] = useState<User | null>(null)
 
   useEffect(() => {
     void me()
-      .then((user) => setGate(user === null ? 'out' : 'in'))
+      .then((user) => {
+        setAccount(user)
+        setGate(user === null ? 'out' : 'in')
+      })
       .catch(async () => {
         // Not a 401: the request never got an answer. A session cookie plus
         // notes on the device is someone on a train, and a login screen there
@@ -789,5 +834,13 @@ export default function App() {
   // request and then replacing it would be a flash of the wrong answer.
   if (gate === 'checking') return null
   if (gate === 'out') return <AuthScreen onSignedIn={() => setGate('in')} />
-  return <Workspace onSignedOut={() => setGate('out')} />
+  return (
+    <Workspace
+      account={account}
+      onSignedOut={() => {
+        setAccount(null)
+        setGate('out')
+      }}
+    />
+  )
 }

@@ -54,7 +54,7 @@ describe('the v1 upgrade', () => {
 
     // Every version since is applied at once, which is what a device that
     // skipped a release actually does.
-    expect(after.verno).toBe(5)
+    expect(after.verno).toBe(6)
     const rows = after.table<Note>('notes')
 
     const upgraded = await rows.get('a')
@@ -101,7 +101,7 @@ describe('the v2 to v3 upgrade', () => {
     declareSchema(after)
     await after.open()
 
-    expect(after.verno).toBe(5)
+    expect(after.verno).toBe(6)
     const rows = after.table<Note>('notes')
     expect(await rows.count()).toBe(2)
     // The notes survive untouched: v3 declares only the new store, so the
@@ -150,7 +150,7 @@ describe('the v3 to v4 upgrade', () => {
     declareSchema(after)
     await after.open()
 
-    expect(after.verno).toBe(5)
+    expect(after.verno).toBe(6)
     const rows = after.table<Note>('notes')
     expect(await rows.count()).toBe(2)
 
@@ -192,6 +192,7 @@ const V4_NOTES =
   'id, updatedAt, deletedAt, dirty, classId, searchText, notebookId'
 
 const V4_NAME = 'nefix-upgrade-test-v4'
+const V5_NAME = 'nefix-upgrade-test-v5'
 
 describe('the v4 to v5 upgrade', () => {
   it('marks every notebook as notes and leaves every note unpaged', async () => {
@@ -268,7 +269,7 @@ describe('the v4 to v5 upgrade', () => {
     declareSchema(after)
     await after.open()
 
-    expect(after.verno).toBe(5)
+    expect(after.verno).toBe(6)
 
     // Every existing notebook is a notebook of notes. A device that upgrades
     // has no collegebooks, because there was no way to make one.
@@ -314,6 +315,119 @@ describe('the v4 to v5 upgrade', () => {
     })
     const meta = after.table<{ key: string; value: number }>('meta')
     expect((await meta.get('syncCursor'))?.value).toBe(42)
+
+    after.close()
+  })
+})
+
+describe('the v5 to v6 upgrade', () => {
+  it('gives every notebook a null settings blob and touches nothing else', async () => {
+    const before = new Dexie(V5_NAME)
+    before.version(1).stores({ notes: V1_STORES })
+    before.version(2).stores({ notes: V2_STORES })
+    before.version(3).stores({ meta: 'key' })
+    before.version(4).stores({
+      classes: V4_CLASSES,
+      notebooks: V4_NOTEBOOKS,
+      notes: V4_NOTES,
+    })
+    // v5 declared no stores of its own, only an upgrade, so a real v5
+    // database is a v4 schema at version 5 with kind and pageOrder filled in.
+    before.version(5)
+    await before.open()
+
+    // A real book, not an empty database: a collegebook with two pages, a
+    // notebook of notes, and a deleted one, because a restore brings that
+    // back and it must not come back with the field undefined.
+    await before.table('notebooks').bulkAdd([
+      {
+        id: 'n1',
+        classId: 'c1',
+        name: 'Prednášky',
+        isGeneral: false,
+        kind: 'collegebook',
+        createdAt: '2026-07-01T10:00:00.000Z',
+        updatedAt: '2026-07-04T10:00:00.000Z',
+        deletedAt: null,
+        version: 7,
+        dirty: false,
+        syncedAt: '2026-07-04T10:00:00.000Z',
+      },
+      {
+        id: 'n2',
+        classId: null,
+        name: 'Cvičenia',
+        isGeneral: false,
+        kind: 'notes',
+        createdAt: '2026-07-01T10:00:00.000Z',
+        updatedAt: '2026-07-02T10:00:00.000Z',
+        deletedAt: '2026-07-03T10:00:00.000Z',
+        version: 2,
+        dirty: true,
+        syncedAt: null,
+      },
+    ])
+    await before.table('notes').bulkAdd([
+      {
+        ...v1Note('p1', 'Untitled', '# Prednášky\n\n'),
+        searchText: 'untitled # prednasky',
+        notebookId: 'n1',
+        pageOrder: 1,
+      },
+      {
+        ...v1Note('p2', 'Untitled', 'druhá strana'),
+        searchText: 'untitled druha strana',
+        notebookId: 'n1',
+        pageOrder: 2,
+      },
+    ])
+    await before.table('meta').put({ key: 'syncCursor', value: 91 })
+    expect(before.verno).toBe(5)
+    before.close()
+
+    const after = new Dexie(V5_NAME)
+    declareSchema(after)
+    await after.open()
+
+    expect(after.verno).toBe(6)
+
+    // Null and not undefined, and not a blob of defaults. Null is what the
+    // server column holds for these books, and it is what lets a later change
+    // to the defaults reach a book that never set anything.
+    const notebooks = after.table<Notebook>('notebooks')
+    expect(await notebooks.count()).toBe(2)
+    const book = await notebooks.get('n1')
+    expect(book?.settings).toBeNull()
+    // Everything the row already held survives, version and dirty included:
+    // a backfill that marked rows dirty would push two notebooks the server
+    // already has.
+    expect(book).toMatchObject({
+      name: 'Prednášky',
+      kind: 'collegebook',
+      classId: 'c1',
+      version: 7,
+      dirty: false,
+      syncedAt: '2026-07-04T10:00:00.000Z',
+    })
+    // The deleted one too, for the reason v4 and v5 backfilled theirs.
+    const gone = await notebooks.get('n2')
+    expect(gone?.settings).toBeNull()
+    expect(gone).toMatchObject({ deletedAt: '2026-07-03T10:00:00.000Z', dirty: true })
+
+    // The pages are not notebooks and gain nothing.
+    const notes = after.table<Note>('notes')
+    expect(await notes.count()).toBe(2)
+    expect(await notes.get('p1')).toMatchObject({
+      bodyMd: '# Prednášky\n\n',
+      pageOrder: 1,
+      notebookId: 'n1',
+    })
+    expect((await notes.get('p2'))?.pageOrder).toBe(2)
+
+    // And the cursor survives: losing it would re-pull everything and
+    // overwrite the rows this upgrade just touched.
+    const meta = after.table<{ key: string; value: number }>('meta')
+    expect((await meta.get('syncCursor'))?.value).toBe(91)
 
     after.close()
   })

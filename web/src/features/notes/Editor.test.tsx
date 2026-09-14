@@ -747,19 +747,55 @@ describe('editor typography', () => {
     expect(getComputedStyle(tiptap.querySelector('code')!).fontFamily).toContain('mono')
   })
 
-  it('paints no ruling in the editor, and keeps it on the class page', () => {
+  it('paints no ruling in the editor, and moves it to the collegebook sheet', () => {
     const tiptap = paint('<p>a</p>')
     expect(getComputedStyle(tiptap.parentElement!).backgroundImage).not.toContain(
       'gradient',
     )
 
-    // The same ruling on the surface it was always right for, so this says
-    // "moved" rather than "deleted".
-    const page = document.createElement('div')
-    page.className = 'page'
-    document.body.appendChild(page)
-    mounted.push(page)
-    expect(getComputedStyle(page).backgroundImage).toContain('gradient')
+    // Off the class page, which is a table of contents and never was a page
+    // of notes, and onto the sheet, which is what ruled paper is for. Both
+    // halves are asserted so this says "moved" rather than "deleted".
+    const painted = (className: string) => {
+      const element = document.createElement('div')
+      element.className = className
+      document.body.appendChild(element)
+      mounted.push(element)
+      return getComputedStyle(element).backgroundImage
+    }
+    expect(painted('page')).not.toContain('gradient')
+    expect(painted('book-page')).toContain('gradient')
+  })
+
+  // Structural only, and jsdom leaves var() unresolved, which is what makes
+  // these readable: the declarations are the assertion. Nothing here can say
+  // where the rule lands on the paper or how wide the sheet comes out — that
+  // needs layout, and jsdom has none.
+  it('prints the margin rule on the sheet instead of at the pane edge', () => {
+    const style = document.createElement('style')
+    style.textContent = CSS
+    document.head.appendChild(style)
+    const sheet = document.createElement('div')
+    sheet.className = 'book-page'
+    document.body.appendChild(sheet)
+    mounted.push(style, sheet)
+
+    // The ruling is painted on the sheet, mixed from the book's own ink so it
+    // stays faint against whatever paper the reader picks.
+    expect(getComputedStyle(sheet).backgroundImage).toContain('var(--ruling)')
+    expect(CSS).toContain('--ruling: color-mix(in srgb, var(--ink)')
+    // The red rule is an element on the paper, placed by the inset setting,
+    // rather than a layer at the pane's edge. jsdom computes no pseudo-element
+    // styles, so the declaration is the assertion.
+    expect(CSS).toContain('.book-page::before')
+    expect(CSS).toContain('left: var(--rule-inset)')
+    // A sheet has a width. Without one it spans the pane and the paper looks
+    // like it carries on past the right of the screen.
+    expect(getComputedStyle(sheet).maxWidth).not.toBe('none')
+
+    // And the pane's own rule is off while a book is open, because two red
+    // verticals read as a table rather than as a margin.
+    expect(CSS).toContain('.content:has(.book)::before')
   })
 })
 

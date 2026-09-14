@@ -3,6 +3,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import type { Editor as TipTap } from '@tiptap/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { updateNote } from '../../db/notes.ts'
+import { DEFAULTS } from '../../db/settings.ts'
 import { db, type Note } from '../../db/schema.ts'
 import Collegebook from './Collegebook.tsx'
 
@@ -115,6 +116,9 @@ const show = async (pages: Note[]) => {
       untitled="Untitled"
       save={(id, patch) => updateNote(id, patch)}
       onCreatePage={() => {}}
+      settings={DEFAULTS}
+      onSettings={() => {}}
+      onResetSettings={() => {}}
     />,
   )
   await settle()
@@ -162,6 +166,29 @@ describe('a collegebook', () => {
     // Scrolled to: the observer reports it, and only then is it built.
     await act(async () => deliver([{ id: pageId(4), isIntersecting: true }]))
     expect(instances(container)).toHaveLength(3)
+  })
+
+  // Structural only. jsdom has no layout engine, so nothing here can say where
+  // the guides land, how tall the writable band is, or whether the grain is
+  // visible — those are looked at, not asserted. What a test can hold is that
+  // every page carries the element, built or held.
+  it('prints the margin guides on every page, built or not', async () => {
+    const { container } = await show([page(1, 'first'), page(2, 'second'), page(3, 'third')])
+
+    await act(async () =>
+      deliver([
+        { id: pageId(1), isIntersecting: true },
+        { id: pageId(2), isIntersecting: true },
+        { id: pageId(3), isIntersecting: false },
+      ]),
+    )
+
+    expect(container.querySelectorAll('.book-page')).toHaveLength(3)
+    expect(container.querySelectorAll('.page-guides')).toHaveLength(3)
+    // Decoration, so it is out of the accessibility tree.
+    for (const guide of container.querySelectorAll('.page-guides')) {
+      expect(guide.getAttribute('aria-hidden')).toBe('true')
+    }
   })
 
   it('remembers a page at the height it was last seen', async () => {
