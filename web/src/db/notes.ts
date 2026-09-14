@@ -1,4 +1,5 @@
 import { liveQuery, type Observable } from 'dexie'
+import { outline } from '../features/notes/outline.ts'
 import { db, searchTextOf, type Note } from './schema.ts'
 import { uuidv7 } from './uuid.ts'
 
@@ -156,6 +157,52 @@ export async function restoreNote(id: string): Promise<void> {
   })
 }
 
+export type Heading = {
+  noteId: string
+  noteTitle: string
+  heading: string
+}
+
+// Every heading across the reader's notes, each with the note it belongs to.
+// This is what a topic picker autocompletes against: a student thinks in
+// topics, and the topics are already written down.
+//
+// It reads every note's body and parses each one, so it is a whole-library
+// read and not a lookup. The caller runs it once when the picker opens, holds
+// the result, and filters it in memory as the user types — it must not be
+// called per keystroke. There is deliberately no cache here: a cache in this
+// layer would have to be invalidated by every note edit, and a stale heading
+// list is worse than a slow one.
+//
+// classId narrows through the notebooks in that class, because a note's own
+// classId is vestigial and always null. Undefined is every note, unfiled ones
+// included.
+export async function listHeadings(classId?: string): Promise<Heading[]> {
+  const [notes, notebooks] = await Promise.all([
+    db.notes.filter((note) => note.deletedAt === null).toArray(),
+    classId === undefined
+      ? Promise.resolve([])
+      : db.notebooks
+          .where('classId')
+          .equals(classId)
+          .filter((row) => row.deletedAt === null)
+          .toArray(),
+  ])
+  const inClass = classId === undefined ? null : new Set(notebooks.map((row) => row.id))
+
+  const headings: Heading[] = []
+  for (const note of notes) {
+    if (inClass !== null && (note.notebookId === null || !inClass.has(note.notebookId))) {
+      continue
+    }
+    for (const heading of outline(note.bodyMd)) {
+      headings.push({ noteId: note.id, noteTitle: note.title, heading })
+    }
+  }
+
+  return headings
+}
+
 export async function countNotes(): Promise<number> {
   return db.notes.filter((note) => note.deletedAt === null).count()
 }
@@ -168,17 +215,22 @@ export async function countUnfiledNotes(): Promise<number> {
     .count()
 }
 
-// Every unsynced row, not only notes: clearEverything takes all three tables,
+// Every unsynced row, not only notes: clearEverything takes all four tables,
 // so a count that named only notes would let the sign-out confirmation
 // promise there was nothing to lose and then delete a class rename.
 //
 // Deleted ones included: a soft delete that has not reached the server is
 // unsynced work like any other, and signing out would lose it.
+//
+// Both this and clearEverything enumerate the tables by hand, which is how a
+// new table gets silently left out of each of them. A table added below has
+// to be added here in the same change.
 export async function countDirtyRows(): Promise<number> {
   const counts = await Promise.all([
     db.notes.filter((row) => row.dirty).count(),
     db.classes.filter((row) => row.dirty).count(),
     db.notebooks.filter((row) => row.dirty).count(),
+    db.deadlines.filter((row) => row.dirty).count(),
   ])
   return counts.reduce((total, count) => total + count, 0)
 }
@@ -188,7 +240,7 @@ export async function countDirtyRows(): Promise<number> {
 // left behind would tell the next account's pull that it is already caught
 // up on notes this device has never held.
 export async function clearEverything(): Promise<void> {
-  const tables = [db.notes, db.classes, db.notebooks, db.meta]
+  const tables = [db.notes, db.classes, db.notebooks, db.deadlines, db.meta]
   await db.transaction('rw', tables, async () => {
     for (const table of tables) await table.clear()
   })

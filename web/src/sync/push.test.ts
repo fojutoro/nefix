@@ -1,15 +1,18 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createDeadline } from '../db/deadlines.ts'
 import { createNote } from '../db/notes.ts'
 import { db, type Note } from '../db/schema.ts'
 import i18n from '../i18n/index.ts'
 import { createClass } from '../db/classes.ts'
 import type {
   PushClass,
+  PushDeadline,
   PushNote,
   PushNotebook,
   PushResult,
   WireClass,
+  WireDeadline,
   WireNotebook,
   WireNote,
 } from './api.ts'
@@ -69,6 +72,7 @@ beforeEach(async () => {
   await db.notes.clear()
   await db.classes.clear()
   await db.notebooks.clear()
+  await db.deadlines.clear()
   await i18n.changeLanguage('en')
   syncState.setState({
     status: 'idle',
@@ -312,6 +316,7 @@ type PushBody = {
   classes: PushClass[]
   notebooks: PushNotebook[]
   notes: PushNote[]
+  deadlines: PushDeadline[]
 }
 
 // The whole request rather than one array of it, so the three can be
@@ -350,10 +355,18 @@ const acceptedNote = (row: PushNote): PushResult => ({
   note: { ...row, version: row.version + 1, seq: 3, created_at: 'c', updated_at: 'u' },
 })
 
+const acceptedDeadline = (row: PushDeadline): PushResult => ({
+  id: row.id,
+  kind: 'deadline',
+  status: 'accepted',
+  deadline: { ...row, version: row.version + 1, seq: 4, created_at: 'c', updated_at: 'u' },
+})
+
 const acceptEverything = (body: PushBody): PushResult[] => [
   ...body.classes.map(acceptedClass),
   ...body.notebooks.map(acceptedNotebook),
   ...body.notes.map(acceptedNote),
+  ...body.deadlines.map(acceptedDeadline),
 ]
 
 describe('pushing classes and notebooks', () => {
@@ -609,5 +622,110 @@ describe('a request that never answers', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('pushing deadlines', () => {
+  it('sends the topics as JSON text and clears dirty on accepted', async () => {
+    const created = await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      kind: 'test',
+      topics: [{ noteId: 'n1', heading: 'Množiny' }],
+    })
+
+    const sent = serveRows(acceptEverything)
+    await pushDirtyRows()
+
+    expect(sent[0]!.deadlines).toHaveLength(1)
+    const wired = sent[0]!.deadlines[0]!
+    // Text on the wire, objects in the database. The server stores these
+    // bytes without reading them, so an object here would be re-encoded by
+    // every client that touched it.
+    expect(wired.topics).toBe('[{"noteId":"n1","heading":"Množiny"}]')
+    expect(wired.due_at).toBe('2026-10-09T00:00:00.000Z')
+    expect(wired.kind).toBe('test')
+
+    const stored = await db.deadlines.get(created.id)
+    expect(stored?.dirty).toBe(false)
+    expect(stored?.version).toBe(1)
+    // And still objects locally, not the text that went out.
+    expect(stored?.topics).toEqual([{ noteId: 'n1', heading: 'Množiny' }])
+  })
+
+  it('sends null for a deadline with no topics', async () => {
+    await createDeadline({ title: 'Písomka', dueAt: '2026-10-09T00:00:00.000Z' })
+
+    const sent = serveRows(acceptEverything)
+    await pushDirtyRows()
+
+    // Null and not "[]": a deadline with no topics has set none, which is
+    // what the column holds for every deadline written before topics existed.
+    expect(sent[0]!.deadlines[0]!.topics).toBeNull()
+  })
+
+  it('takes the server copy of a conflicted deadline without forking', async () => {
+    const local = await createDeadline({
+      title: 'Renamed on this device',
+      dueAt: '2026-10-09T00:00:00.000Z',
+    })
+
+    serveRows(() => [
+      {
+        id: local.id,
+        kind: 'deadline',
+        status: 'conflict',
+        deadline: {
+          id: local.id,
+          class_id: null,
+          title: 'Moved on the other device',
+          kind: 'test' as const,
+          due_at: '2026-10-16T00:00:00.000Z',
+          note: null,
+          topics: '[{"noteId":"n9","heading":"Relácie"}]',
+          done_at: null,
+          version: 5,
+          seq: 9,
+          created_at: local.createdAt,
+          updated_at: '2026-08-05T12:00:00.000Z',
+          deleted_at: null,
+        } satisfies WireDeadline,
+      },
+    ])
+
+    const summary = await pushDirtyRows()
+
+    // Last write wins, deliberately unlike a note: one row, not two. A forked
+    // deadline would show twice in a list, and two devices editing one
+    // deadline is not a case worth preserving both sides of.
+    const rows = await db.deadlines.toArray()
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      id: local.id,
+      title: 'Moved on the other device',
+      dueAt: '2026-10-16T00:00:00.000Z',
+      version: 5,
+      dirty: false,
+      syncedAt: '2026-08-05T12:00:00.000Z',
+    })
+    // The server's topics arrive parsed, because that is what this layer holds.
+    expect(rows[0]!.topics).toEqual([{ noteId: 'n9', heading: 'Relácie' }])
+    expect(summary.conflicted).toBe(1)
+  })
+
+  it('leaves a deadline the server refuses dirty and counts it', async () => {
+    const local = await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-09T00:00:00.000Z',
+    })
+
+    serveRows(() => [{ id: local.id, kind: 'deadline', status: 'forbidden' }])
+
+    const summary = await pushDirtyRows()
+
+    expect(summary.forbidden).toBe(1)
+    // Left dirty rather than dropped: silently is the one way this must not
+    // fail.
+    expect((await db.deadlines.get(local.id))?.dirty).toBe(true)
   })
 })

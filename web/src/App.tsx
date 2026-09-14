@@ -9,6 +9,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import {
   archiveClass,
+  countDeadlinesInClass,
   countNotesInClass,
   createClass,
   deleteClassCascade,
@@ -465,15 +466,33 @@ function Workspace({
 
   const destroy = async () => {
     if (selection.kind !== 'class' || shelf === null) return
-    // Counted here rather than taken from the cards on screen: a pull, another
-    // window, or a note written since the page loaded all make that number
-    // stale, and a stale number in a destructive dialog is one that lied to
-    // get the answer it wanted.
-    const count = await countNotesInClass(selection.classId)
+    // Both counted here rather than taken from the cards on screen: a pull,
+    // another window, or a note written since the page loaded all make those
+    // numbers stale, and a stale number in a destructive dialog is one that
+    // lied to get the answer it wanted.
+    const [notes, deadlines] = await Promise.all([
+      countNotesInClass(selection.classId),
+      countDeadlinesInClass(selection.classId),
+    ])
+    // Four sentences rather than one with two counts in it: i18next pluralises
+    // on a single number, and Slovak needs each noun to pick its own form.
+    // Where both are named the halves are pluralised on their own and
+    // interpolated already written.
     const question =
-      count === 0
+      notes === 0 && deadlines === 0
         ? t('class.deleteConfirmEmpty', { name: shelf.name })
-        : t('class.deleteConfirm', { name: shelf.name, count })
+        : deadlines === 0
+          ? t('class.deleteConfirm', { name: shelf.name, count: notes })
+          : notes === 0
+            ? t('class.deleteConfirmDeadlines', {
+                name: shelf.name,
+                count: deadlines,
+              })
+            : t('class.deleteConfirmBoth', {
+                name: shelf.name,
+                notes: t('notes.count', { count: notes }),
+                deadlines: t('deadlines.count', { count: deadlines }),
+              })
     if (!window.confirm(question)) return
     await deleteClassCascade(selection.classId)
     setChosen(TODAY)

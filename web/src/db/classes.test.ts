@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   archiveClass,
+  countDeadlinesInClass,
   countNotesInClass,
   createClass,
   deleteClass,
@@ -16,6 +17,7 @@ import {
   writeLastClassId,
   writeLastWrittenClassId,
 } from './classes.ts'
+import { createDeadline, deleteDeadline } from './deadlines.ts'
 import { createNotebook, listNotebooks } from './notebooks.ts'
 import { createNote, deleteNote } from './notes.ts'
 import { db } from './schema.ts'
@@ -26,6 +28,7 @@ beforeEach(async () => {
   await db.notes.clear()
   await db.classes.clear()
   await db.notebooks.clear()
+  await db.deadlines.clear()
   await db.meta.clear()
 })
 
@@ -406,5 +409,147 @@ describe('deleteClassCascade', () => {
     await deleteClassCascade(created.id)
 
     expect(await getClass(created.id)).toBeUndefined()
+  })
+})
+
+// A deadline belongs to its class the way a notebook does. "Test for
+// Diskrétna matematika" means nothing once the class is gone, and an orphan
+// sitting in the general dashboard with no class context is worse than losing
+// it with the class it named.
+describe('deleteClassCascade and deadlines', () => {
+  it('soft-deletes the class\'s deadlines and leaves every other one alone', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const other = await createClass({ name: 'Zoológia' })
+    const mine = await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: discrete.id,
+    })
+    const elsewhere = await createDeadline({
+      title: 'Zápočet',
+      dueAt: '2026-10-10T00:00:00.000Z',
+      classId: other.id,
+    })
+    // The one that proves it discriminates rather than clearing the table.
+    const loose = await createDeadline({
+      title: 'Prihláška na internát',
+      dueAt: '2026-10-11T00:00:00.000Z',
+    })
+    await db.deadlines.toCollection().modify({ dirty: false })
+    await tick()
+
+    await deleteClassCascade(discrete.id)
+
+    const deleted = await db.deadlines.get(mine.id)
+    expect(deleted?.deletedAt).not.toBeNull()
+    // Dirty, because the delete has to reach the other device or the deadline
+    // stays there.
+    expect(deleted?.dirty).toBe(true)
+    expect(deleted!.updatedAt > mine.updatedAt).toBe(true)
+
+    // Another class's, and one that belongs to no class at all.
+    expect(await db.deadlines.get(elsewhere.id)).toMatchObject({
+      deletedAt: null,
+      dirty: false,
+    })
+    expect(await db.deadlines.get(loose.id)).toMatchObject({
+      deletedAt: null,
+      dirty: false,
+    })
+  })
+
+  // The placement of the cascade, not just its presence. A class with no
+  // notebooks still takes its deadlines with it, so the write cannot live
+  // inside the `if (notebooks.length > 0)` branch that guards the notes.
+  it('takes the deadlines of a class that has no notebooks', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const mine = await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: discrete.id,
+    })
+    const loose = await createDeadline({
+      title: 'Voľná',
+      dueAt: '2026-10-11T00:00:00.000Z',
+    })
+    await db.notebooks.clear()
+
+    await deleteClassCascade(discrete.id)
+
+    expect((await db.deadlines.get(mine.id))!.deletedAt).not.toBeNull()
+    expect(await db.deadlines.get(mine.id)).toMatchObject({ dirty: true })
+    expect(await db.deadlines.get(loose.id)).toMatchObject({ deletedAt: null })
+  })
+
+  it('leaves a deadline that was already deleted as it was', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const gone = await createDeadline({
+      title: 'Písomka',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: discrete.id,
+    })
+    await deleteDeadline(gone.id)
+    const before = (await db.deadlines.get(gone.id))!
+    await db.deadlines.update(gone.id, { dirty: false })
+    await tick()
+
+    await deleteClassCascade(discrete.id)
+
+    // Re-stamping it would push a row the server already has and move a
+    // deletion date that means something.
+    expect(await db.deadlines.get(gone.id)).toMatchObject({
+      deletedAt: before.deletedAt,
+      updatedAt: before.updatedAt,
+      dirty: false,
+    })
+  })
+})
+
+describe('countDeadlinesInClass', () => {
+  it('counts the outstanding ones and nothing else', async () => {
+    const discrete = await createClass({ name: 'Diskrétna matematika' })
+    const other = await createClass({ name: 'Zoológia' })
+    for (const title of ['Písomka', 'Zápočet']) {
+      await createDeadline({
+        title,
+        dueAt: '2026-10-09T00:00:00.000Z',
+        classId: discrete.id,
+      })
+    }
+    const gone = await createDeadline({
+      title: 'Zrušená',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: discrete.id,
+    })
+    await deleteDeadline(gone.id)
+    await createDeadline({
+      title: 'Inde',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: other.id,
+    })
+    await createDeadline({ title: 'Voľná', dueAt: '2026-10-09T00:00:00.000Z' })
+
+    expect(await countDeadlinesInClass(discrete.id)).toBe(2)
+    expect(await countDeadlinesInClass(other.id)).toBe(1)
+  })
+
+  it('is zero for a class with none', async () => {
+    const created = await createClass({ name: 'Zoológia' })
+
+    expect(await countDeadlinesInClass(created.id)).toBe(0)
+  })
+
+  // A ticked-off deadline is still a deadline and still gets destroyed, so
+  // the sentence asking for consent has to include it.
+  it('counts a deadline that has been ticked off', async () => {
+    const created = await createClass({ name: 'Diskrétna matematika' })
+    const done = await createDeadline({
+      title: 'Hotová',
+      dueAt: '2026-10-09T00:00:00.000Z',
+      classId: created.id,
+    })
+    await db.deadlines.update(done.id, { doneAt: '2026-10-08T09:00:00.000Z' })
+
+    expect(await countDeadlinesInClass(created.id)).toBe(1)
   })
 })

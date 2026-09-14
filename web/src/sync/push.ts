@@ -2,18 +2,22 @@ import {
   db,
   searchTextOf,
   type Class,
+  type Deadline,
   type Note,
   type Notebook,
+  type Topic,
 } from '../db/schema.ts'
 import { uuidv7 } from '../db/uuid.ts'
 import i18n from '../i18n/index.ts'
 import {
   push,
   type PushClass,
+  type PushDeadline,
   type PushNote,
   type PushNotebook,
   type PushResult,
   type WireClass,
+  type WireDeadline,
   type WireNote,
   type WireNotebook,
 } from './api.ts'
@@ -63,6 +67,59 @@ const toWireNotebook = (row: Notebook): PushNotebook => ({
   deleted_at: row.deletedAt,
 })
 
+const toWireDeadline = (row: Deadline): PushDeadline => ({
+  id: row.id,
+  class_id: row.classId,
+  title: row.title,
+  kind: row.kind,
+  due_at: row.dueAt,
+  note: row.note,
+  // Null rather than '[]' for a deadline with no topics: null is what the
+  // column holds for one that has set none, and the two must not become
+  // different states on the wire.
+  //
+  // Stringified straight from the stored objects, never rebuilt. Those
+  // objects came out of JSON.parse and may carry keys this version has never
+  // heard of; JSON.stringify emits them all, in the order they arrived.
+  topics: row.topics.length === 0 ? null : JSON.stringify(row.topics),
+  done_at: row.doneAt,
+  version: row.version,
+  deleted_at: row.deletedAt,
+})
+
+// The topics as the server returned them, with every key they arrived with.
+// A parse and a stringify preserve keys this version does not know and the
+// order they came in — but only because nothing here rebuilds the objects.
+// Mapping them into fresh { noteId, heading } literals is what would drop a
+// newer client's keys, and it would pass every other test in this file.
+//
+// What does not survive is the formatting. The server's guarantee is byte
+// identity: it stores the bytes it was sent and returns them untouched. This
+// pair is weaker — keys and their order come back, whitespace does not, so a
+// blob that arrives pretty-printed leaves compact. That is the price of
+// parsing, and parsing is right here because the client is the only thing
+// that reads a topic.
+//
+// It is deliberately weaker than notebooks.settings, which stays text from
+// the database to the wire and back and therefore is byte-identical end to
+// end. Nothing is lost today because every writer emits compact JSON, but a
+// newer client that pretty-prints its topics will have them reformatted by an
+// older one. Do not assume byte identity on this path.
+function parseTopics(raw: string | null): Topic[] {
+  if (raw === null) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as Topic[]) : []
+  } catch {
+    // The server validated this as JSON before storing it, so bytes that fail
+    // here are a shape from the future rather than corruption. Degrading to
+    // "no topics" keeps the deadline; throwing would fail the whole pull and
+    // cost the reader every row in the page.
+    console.warn('sync: a deadline arrived with topics this client cannot read')
+    return []
+  }
+}
+
 // Shared with the pull path. Both halves write the server's copy into a
 // local row, and there has to be exactly one function doing it or the two
 // drift apart on the next field either of them gains.
@@ -111,6 +168,23 @@ export const fromWireNotebook = (server: WireNotebook): Notebook => ({
   // the client that wrote the blob still returns the bytes it was given, and
   // parsing them here to store them would be the one place they could be lost.
   settings: server.settings,
+  createdAt: server.created_at,
+  updatedAt: server.updated_at,
+  deletedAt: server.deleted_at,
+  version: server.version,
+  dirty: false,
+  syncedAt: server.updated_at,
+})
+
+export const fromWireDeadline = (server: WireDeadline): Deadline => ({
+  id: server.id,
+  classId: server.class_id,
+  title: server.title,
+  kind: server.kind,
+  dueAt: server.due_at,
+  note: server.note,
+  topics: parseTopics(server.topics),
+  doneAt: server.done_at,
   createdAt: server.created_at,
   updatedAt: server.updated_at,
   deletedAt: server.deleted_at,
@@ -223,6 +297,38 @@ async function applyNotebookResult(
   }
 }
 
+async function applyDeadlineResult(
+  sent: Deadline,
+  result: PushResult,
+  summary: PushSummary,
+): Promise<void> {
+  const server = result.deadline
+  if (result.status === 'accepted' && server !== undefined) {
+    await db.transaction('rw', db.deadlines, async () => {
+      const current = await db.deadlines.get(sent.id)
+      if (current === undefined) return
+      await db.deadlines.update(sent.id, {
+        version: server.version,
+        syncedAt: server.updated_at,
+        dirty: current.updatedAt !== sent.updatedAt,
+      })
+    })
+    summary.pushed += 1
+  } else if (result.status === 'conflict' && server !== undefined) {
+    // Last write wins, as for a class or a notebook, and deliberately not the
+    // fork a note gets. A forked deadline would show twice in every list, and
+    // two devices moving one deadline is not a case worth preserving both
+    // sides of. See applyClassResult; do not "fix" the two into agreement.
+    await db.deadlines.put(fromWireDeadline(server))
+    summary.conflicted += 1
+  } else if (result.status === 'forbidden') {
+    console.warn(
+      `sync: the server refuses deadline ${sent.id} as another user's`,
+    )
+    summary.forbidden += 1
+  }
+}
+
 async function applyNoteResult(
   sent: Note,
   result: PushResult,
@@ -247,6 +353,7 @@ type Batch = {
   classes: Class[]
   notebooks: Notebook[]
   notes: Note[]
+  deadlines: Deadline[]
 }
 
 // `kind` and not which field came back populated: a forbidden result carries
@@ -266,6 +373,12 @@ async function applyResult(
     const sent = batch.notebooks.find((row) => row.id === result.id)
     if (sent === undefined) return false
     await applyNotebookResult(sent, result, summary)
+    return true
+  }
+  if (result.kind === 'deadline') {
+    const sent = batch.deadlines.find((row) => row.id === result.id)
+    if (sent === undefined) return false
+    await applyDeadlineResult(sent, result, summary)
     return true
   }
   const sent = batch.notes.find((row) => row.id === result.id)
@@ -300,7 +413,8 @@ export async function pushDirtyRows(): Promise<PushSummary> {
     const classes = await db.classes.filter((row) => row.dirty).toArray()
     const notebooks = await db.notebooks.filter((row) => row.dirty).toArray()
     const notes = await db.notes.filter((row) => row.dirty).toArray()
-    queued = classes.length + notebooks.length + notes.length
+    const deadlines = await db.deadlines.filter((row) => row.dirty).toArray()
+    queued = classes.length + notebooks.length + notes.length + deadlines.length
     sent = { classes: classes.length, notebooks: notebooks.length, notes: notes.length }
 
     // Each array is capped at a hundred on its own, so the number of
@@ -309,7 +423,8 @@ export async function pushDirtyRows(): Promise<PushSummary> {
     // first request instead of the notebook waiting for a full page of
     // classes to drain ahead of it.
     const requests = Math.ceil(
-      Math.max(classes.length, notebooks.length, notes.length) / BATCH,
+      Math.max(classes.length, notebooks.length, notes.length, deadlines.length) /
+        BATCH,
     )
     for (let index = 0; index < requests; index += 1) {
       const from = index * BATCH
@@ -317,11 +432,13 @@ export async function pushDirtyRows(): Promise<PushSummary> {
         classes: classes.slice(from, from + BATCH),
         notebooks: notebooks.slice(from, from + BATCH),
         notes: notes.slice(from, from + BATCH),
+        deadlines: deadlines.slice(from, from + BATCH),
       }
       const { results } = await push({
         classes: batch.classes.map(toWireClass),
         notebooks: batch.notebooks.map(toWireNotebook),
         notes: batch.notes.map(toWire),
+        deadlines: batch.deadlines.map(toWireDeadline),
       })
       for (const result of results) {
         if (await applyResult(batch, result, summary)) handled += 1

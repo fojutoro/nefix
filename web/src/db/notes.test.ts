@@ -6,6 +6,7 @@ import {
   createNote,
   deleteNote,
   getNote,
+  listHeadings,
   listNotes,
   restoreNote,
   updateNote,
@@ -18,6 +19,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 2))
 
 beforeEach(async () => {
   await db.notes.clear()
+  await db.notebooks.clear()
 })
 
 describe('createNote', () => {
@@ -169,5 +171,89 @@ describe('countUnfiledNotes', () => {
     await deleteNote(deleted.id)
 
     expect(await countUnfiledNotes()).toBe(2)
+  })
+})
+
+// The source a topic picker autocompletes against. It is a read across every
+// note's body, which is why the caller loads it once and filters in memory —
+// see the note on listHeadings itself.
+describe('listHeadings', () => {
+  it('finds every heading and attributes each to its note', async () => {
+    await createNote({
+      title: 'Množiny',
+      bodyMd: '# Množiny\n\ntext\n\n## Relácie\n\ntext\n\n### Funkcie',
+    })
+    await createNote({ title: 'Algebra', bodyMd: '# Algebra\n\n## Vektory' })
+
+    const headings = await listHeadings()
+
+    // The first heading of a note is already its title on the row above, so
+    // outline() drops it. What is left is what a reader would pick.
+    expect(headings).toEqual([
+      { noteId: expect.any(String), noteTitle: 'Množiny', heading: 'Relácie' },
+      { noteId: expect.any(String), noteTitle: 'Množiny', heading: 'Funkcie' },
+      { noteId: expect.any(String), noteTitle: 'Algebra', heading: 'Vektory' },
+    ])
+    // Each one carries the id of the note it came from, which is the half of
+    // a topic that survives the heading being renamed.
+    const [first, , third] = headings
+    expect(first!.noteId).not.toBe(third!.noteId)
+  })
+
+  it('skips deleted notes and headings inside code fences', async () => {
+    const gone = await createNote({ title: 'Zmazaná', bodyMd: '# x\n\n## Skrytá' })
+    await deleteNote(gone.id)
+    await createNote({
+      title: 'Kód',
+      bodyMd: '# Kód\n\n```\n# not a heading\n```\n\n## Skutočná',
+    })
+
+    const headings = await listHeadings()
+
+    expect(headings.map((row) => row.heading)).toEqual(['Skutočná'])
+  })
+
+  it('narrows to one class through the notebooks in it', async () => {
+    await db.notebooks.bulkAdd([
+      {
+        id: 'nb1',
+        classId: 'c1',
+        name: 'Prednášky',
+        isGeneral: true,
+        kind: 'notes',
+        settings: null,
+        createdAt: 'x',
+        updatedAt: 'x',
+        deletedAt: null,
+        version: 0,
+        dirty: false,
+        syncedAt: null,
+      },
+      {
+        id: 'nb2',
+        classId: 'c2',
+        name: 'Iné',
+        isGeneral: true,
+        kind: 'notes',
+        settings: null,
+        createdAt: 'x',
+        updatedAt: 'x',
+        deletedAt: null,
+        version: 0,
+        dirty: false,
+        syncedAt: null,
+      },
+    ])
+    await createNote({ title: 'A', bodyMd: '# A\n\n## V triede', notebookId: 'nb1' })
+    await createNote({ title: 'B', bodyMd: '# B\n\n## Inde', notebookId: 'nb2' })
+    await createNote({ title: 'C', bodyMd: '# C\n\n## Nezaradená' })
+
+    expect((await listHeadings('c1')).map((row) => row.heading)).toEqual(['V triede'])
+    // Undefined is every note, unfiled ones included.
+    expect((await listHeadings()).map((row) => row.heading).sort()).toEqual([
+      'Inde',
+      'Nezaradená',
+      'V triede',
+    ])
   })
 })

@@ -181,16 +181,32 @@ export async function countNotesInClass(id: string): Promise<number> {
     .count()
 }
 
+// The other number in that sentence. A deadline goes with its class for the
+// same reason its notes do: "test for Diskrétna matematika" means nothing once
+// the class is gone, and one left behind would sit in the general dashboard
+// with no context to read it by.
+//
+// Ticked-off ones are counted. A done deadline is still destroyed, so the
+// consent has to cover it.
+export async function countDeadlinesInClass(id: string): Promise<number> {
+  return db.deadlines
+    .where('classId')
+    .equals(id)
+    .and((row) => row.deletedAt === null)
+    .count()
+}
+
 // Archiving is the gentle option and the one the menu offers first. This is
 // the other one: everything under the class goes with it.
 //
-// Soft, like every other delete here, and dirty on all three tables. A hard
+// Soft, like every other delete here, and dirty on all four tables. A hard
 // delete would leave sync unable to tell "deleted" from "never existed", and
 // the notes are the rows that would otherwise become orphans — invisible on
 // this device and back on the next pull.
 export async function deleteClassCascade(id: string): Promise<void> {
   const timestamp = now()
-  await db.transaction('rw', db.classes, db.notebooks, db.notes, async () => {
+  const tables = [db.classes, db.notebooks, db.notes, db.deadlines]
+  await db.transaction('rw', tables, async () => {
     const notebooks = await db.notebooks
       .where('classId')
       .equals(id)
@@ -210,6 +226,16 @@ export async function deleteClassCascade(id: string): Promise<void> {
         .and((row) => row.deletedAt === null)
         .modify({ deletedAt: timestamp, updatedAt: timestamp, dirty: true })
     }
+    // Outside the notebooks branch: a class with no notebooks can still hold
+    // deadlines, and they go with it either way.
+    //
+    // Only this class's. A loose deadline belongs to no class and is nobody's
+    // to take, so the `where` is what makes this a cascade and not a purge.
+    await db.deadlines
+      .where('classId')
+      .equals(id)
+      .and((row) => row.deletedAt === null)
+      .modify({ deletedAt: timestamp, updatedAt: timestamp, dirty: true })
     await deleteClass(id)
   })
 }
