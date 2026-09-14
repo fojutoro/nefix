@@ -127,7 +127,7 @@ describe('searchNotes within a scope', () => {
 
 // A page is a note with an order, and it lives in a notebook that belongs to
 // a class. Without a guard in scopeOf it therefore turns up in the class's
-// table of contents, in Today and in any search — three lists where a page
+// table of contents, on Home's shelf and in any search — three lists where a page
 // torn out of its book is actively wrong. The four tests below are the same
 // predicate through its three call sites, because they share the predicate
 // and nothing else.
@@ -148,10 +148,10 @@ describe('scopeOf keeps pages out of the note lists', () => {
     expect(titles(await searchNotes('', scope))).toEqual(['Loose note'])
   })
 
-  it('leaves them out of Today', async () => {
+  it("leaves them out of Home's shelf", async () => {
     await seed()
 
-    const scope = scopeOf({ kind: 'today' }, [book, plain])
+    const scope = scopeOf({ kind: 'home' }, [book, plain])
     expect(titles(await searchNotes('', scope))).toEqual(['Loose note'])
   })
 

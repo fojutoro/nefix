@@ -9,7 +9,8 @@ import type { ClassWithRecency } from '../../db/classes.ts'
 import type { Class } from '../../db/schema.ts'
 import Icon, { type IconName } from '../../ui/Icon.tsx'
 import { relative, useMinute } from '../notes/relative.ts'
-import { keyOf, TODAY, type Selection } from './selection.ts'
+import NewClassForm from './NewClassForm.tsx'
+import { HOME, keyOf, type Selection } from './selection.ts'
 
 type RowProps = {
   icon: IconName
@@ -88,7 +89,6 @@ export default function ClassRail({
       }),
     [i18n.language],
   )
-  const [name, setName] = useState('')
   const [showArchived, setShowArchived] = useState(false)
 
   const now = useMinute()
@@ -100,11 +100,6 @@ export default function ClassRail({
         {relative(iso, format, now)}
       </time>
     )
-
-  const cancel = () => {
-    setName('')
-    onCreatingChange(false)
-  }
 
   // Archived classes reach this without a recency column. What an archived
   // class was last touched at is not something to act on, and the column is
@@ -124,15 +119,15 @@ export default function ClassRail({
 
   return (
     <nav className="rail-nav" aria-label={t('rail.label')}>
-      {/* Today is a shortcut and not the heading of the rail, so it is set
+      {/* Home is a shortcut and not the heading of the rail, so it is set
           small and tracked and given no label of its own: a label over a
           group of one is noise. */}
       <ul>
         <Row
-          icon="sun"
-          label={t('rail.today')}
-          current={current === 'today'}
-          onClick={() => onSelect(TODAY)}
+          icon="house"
+          label={t('rail.home')}
+          current={current === 'home'}
+          onClick={() => onSelect(HOME)}
           className="rail-shortcut"
         />
       </ul>
@@ -174,33 +169,11 @@ export default function ClassRail({
         </ul>
       )}
       {creating ? (
-        <form
+        <NewClassForm
           className="rail-create"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const trimmed = name.trim()
-            // An empty name does nothing. A class is named after something
-            // that exists, so there is no "Untitled" class to create.
-            if (trimmed === '') return
-            setName('')
-            onCreate(trimmed)
-          }}
-        >
-          <input
-            autoFocus
-            value={name}
-            aria-label={t('rail.className')}
-            placeholder={t('rail.className')}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== 'Escape') return
-              // Kept off the window listener that closes the drawer: while
-              // this field has focus, Escape means cancel the row.
-              event.stopPropagation()
-              cancel()
-            }}
-          />
-        </form>
+          onCreate={onCreate}
+          onCancel={() => onCreatingChange(false)}
+        />
       ) : (
         <button
           type="button"
