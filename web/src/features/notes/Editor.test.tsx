@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { Editor as TipTap } from '@tiptap/core'
+import type { Node as ProseMirrorNodeLike } from '@tiptap/pm/model'
 import { Editor as BareEditor } from '@tiptap/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n/index.ts'
@@ -9,6 +10,7 @@ import { createDeadline } from '../../db/deadlines.ts'
 import { updateNote } from '../../db/notes.ts'
 import CSS from '../../index.css?raw'
 import Editor, { editorExtensions, type OpenMath } from './Editor.tsx'
+import { TURN_INTO } from './blocks.ts'
 import { outline } from './outline.ts'
 import { markTopics } from './topics.ts'
 import { useAutosave } from './useAutosave.ts'
@@ -1321,15 +1323,31 @@ describe('block menu', () => {
     const { editor, container } = await open('alpha', false)
     await caretAt(editor, 3)
     await click(container.querySelector('.block-add') as HTMLElement)
+    // Wherever the focus actually is, which is where a real key lands. Sent to
+    // the menu element instead, this passed while the menu never had focus
+    // and Escape went on to close the note.
+    expect(document.activeElement).toBe(blockMenu(container))
 
     const seen = vi.fn()
     window.addEventListener('keydown', seen)
-    await press(blockMenu(container) as HTMLElement, 'n')
-    await press(blockMenu(container) as HTMLElement, 'Escape')
+    await press(document.activeElement as HTMLElement, 'n')
+    await press(document.activeElement as HTMLElement, 'Escape')
     window.removeEventListener('keydown', seen)
 
     expect(seen).not.toHaveBeenCalled()
     expect(blockMenu(container)).toBeNull()
+  })
+
+  // The slash menu is driven from the document's own key handler, so taking
+  // the focus away from the text would stop the typing that filters it.
+  it('leaves the focus in the text while the slash menu is open', async () => {
+    const { editor, container } = await open('', false)
+    await caretAt(editor, 1)
+    await typeIn(editor, '/')
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+
+    expect(blockMenu(container)).not.toBeNull()
+    expect(document.activeElement).toBe(tiptapIn(container))
   })
 })
 
@@ -1396,5 +1414,930 @@ describe('topic highlight', () => {
     expect(editor.view.dom.querySelectorAll('.topic-marked')).toHaveLength(2)
     expect(editor.getMarkdown()).toBe(BODY)
     editor.destroy()
+  })
+})
+
+describe('block controls', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await i18n.changeLanguage('en')
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  const TABLE = '| a | b |\n| --- | --- |\n| 1 | 2 |'
+
+  const controlsIn = (container: HTMLElement) => container.querySelector('.block-controls')
+
+  const item = (container: HTMLElement, id: string) =>
+    container.querySelector<HTMLButtonElement>(`.block-controls [data-command="${id}"]`)
+
+  const commandsIn = (container: HTMLElement, group: string) =>
+    Array.from(
+      container.querySelectorAll(`.block-controls [aria-label="${group}"] [data-command]`),
+    ).map((button) => button.getAttribute('data-command'))
+
+  const posOf = (editor: TipTap, text: string) => {
+    let found = -1
+    editor.state.doc.descendants((node, pos) => {
+      if (found === -1 && node.isText && node.text!.includes(text)) {
+        found = pos + node.text!.indexOf(text)
+      }
+    })
+    if (found === -1) throw new Error(`no ${text} in the document`)
+    return found
+  }
+
+  const caretAt = async (editor: TipTap, pos: number) => {
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection(pos)
+    })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+  }
+
+  const press = async (element: HTMLElement, key: string) => {
+    await act(async () => {
+      element.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+      )
+    })
+  }
+
+  const click = async (element: HTMLElement) => {
+    await act(async () => {
+      element.click()
+    })
+  }
+
+  const openAt = async (bodyMd: string, text: string) => {
+    const opened = await open(bodyMd, false)
+    await caretAt(opened.editor, posOf(opened.editor, text))
+    await click(opened.container.querySelector('.block-handle') as HTMLElement)
+    return opened
+  }
+
+  const run = async (container: HTMLElement, id: string) => {
+    const button = item(container, id)
+    if (button === null) throw new Error(`no ${id} in the menu`)
+    await click(button)
+  }
+
+  // The table as its cells' text, with whether the first row is a header.
+  const grid = (editor: TipTap) => {
+    let table: ProseMirrorNodeLike | null = null
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'table') table = node
+      return table === null
+    })
+    if (table === null) return null
+    const rows: ProseMirrorNodeLike[] = []
+    ;(table as ProseMirrorNodeLike).forEach((row) => rows.push(row))
+    const cells = rows.map((row) => {
+      const texts: string[] = []
+      row.forEach((cell) => texts.push(cell.textContent))
+      return texts
+    })
+    return { cells, header: rows[0]!.firstChild!.type.name === 'tableHeader' }
+  }
+
+  it('deletes the block the handle is beside', async () => {
+    const { editor, container } = await openAt('alpha\n\nbeta\n\ngamma', 'beta')
+
+    await run(container, 'delete')
+
+    expect(editor.getMarkdown()).toBe('alpha\n\ngamma')
+    expect(controlsIn(container)).toBeNull()
+  })
+
+  it('duplicates the block, identical, directly below it', async () => {
+    const { editor, container } = await openAt('# Title **bold**\n\nbody', 'Title')
+
+    await run(container, 'duplicate')
+
+    const { doc } = editor.state
+    expect(doc.child(1).eq(doc.child(0))).toBe(true)
+    expect(doc.child(2).textContent).toBe('body')
+    expect(editor.getMarkdown()).toBe('# Title **bold**\n\n# Title **bold**\n\nbody')
+  })
+
+  it('moves a block down and up, and leaves the option out at each end', async () => {
+    const { editor, container } = await openAt('alpha\n\nbeta\n\ngamma', 'alpha')
+    expect(item(container, 'moveUp')).toBeNull()
+    expect(item(container, 'moveDown')).not.toBeNull()
+
+    await run(container, 'moveDown')
+    expect(editor.getMarkdown()).toBe('beta\n\nalpha\n\ngamma')
+    // The cursor went with the block, so a second move moves the same one.
+    expect(editor.state.selection.$from.parent.textContent).toBe('alpha')
+
+    await caretAt(editor, posOf(editor, 'gamma'))
+    await click(container.querySelector('.block-handle') as HTMLElement)
+    expect(item(container, 'moveDown')).toBeNull()
+    expect(item(container, 'moveUp')).not.toBeNull()
+
+    await run(container, 'moveUp')
+    expect(editor.getMarkdown()).toBe('beta\n\ngamma\n\nalpha')
+  })
+
+  it('turns a block into another through the shared command list', async () => {
+    const { editor, container } = await openAt('plain words', 'plain')
+    expect(commandsIn(container, 'Turn into')).toEqual(TURN_INTO.map((command) => command.id))
+
+    const heading2 = TURN_INTO.find((command) => command.id === 'heading2')!
+    const ran = vi.spyOn(heading2, 'run')
+    await run(container, 'heading2')
+
+    expect(ran).toHaveBeenCalledOnce()
+    // Trimmed: StarterKit adds a trailing paragraph after a final heading.
+    expect(editor.getMarkdown().trimEnd()).toBe('## plain words')
+    ran.mockRestore()
+  })
+
+  it('turns a quote back into a paragraph outside the quote', async () => {
+    const { editor, container } = await openAt('> quoted', 'quoted')
+
+    await run(container, 'paragraph')
+
+    expect(editor.state.doc.firstChild?.type.name).toBe('paragraph')
+    expect(editor.getMarkdown().trimEnd()).toBe('quoted')
+  })
+
+  // By the label a person reads, not the command id, so a label wired to the
+  // wrong command fails here.
+  it.each([
+    ['Insert row above', [['a', 'b'], ['', ''], ['1', '2']], true],
+    ['Insert row below', [['a', 'b'], ['1', '2'], ['', '']], true],
+    ['Insert column left', [['', 'a', 'b'], ['', '1', '2']], true],
+    ['Insert column right', [['a', '', 'b'], ['1', '', '2']], true],
+    ['Delete row', [['a', 'b']], true],
+    ['Delete column', [['b'], ['2']], true],
+  ])('%s does what it says to the table', async (label, cells, header) => {
+    const { editor, container } = await openAt(TABLE, '1')
+    const button = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.block-controls button'),
+    ).find((candidate) => candidate.textContent === label)
+
+    await click(button!)
+
+    expect(grid(editor)).toEqual({ cells, header })
+  })
+
+  it('has no Toggle header row, which would save an empty header', async () => {
+    const { container } = await openAt(TABLE, '1')
+
+    expect(item(container, 'toggleHeaderRow')).toBeNull()
+    const labels = Array.from(container.querySelectorAll('.block-controls button')).map(
+      (button) => button.textContent,
+    )
+    expect(labels).toContain('Delete table')
+    expect(labels).not.toContain('Toggle header row')
+  })
+
+  it('deletes the table', async () => {
+    const { editor, container } = await openAt(`before\n\n${TABLE}\n\nafter`, '1')
+
+    await run(container, 'deleteTable')
+
+    expect(grid(editor)).toBeNull()
+    expect(editor.getMarkdown()).toBe('before\n\nafter')
+  })
+
+  // Present and disabled are both "not clickable", so this asserts each half:
+  // the row is in the menu, and it is the disabled attribute keeping it inert.
+  it('disables, and does not hide, what cannot apply to a one-cell table', async () => {
+    const { editor, container } = await openAt('| a |\n| --- |', 'a')
+
+    for (const id of ['deleteRow', 'deleteColumn']) {
+      const button = item(container, id)
+      expect(button).not.toBeNull()
+      expect(button!.disabled).toBe(true)
+    }
+    expect(item(container, 'addRowAfter')!.disabled).toBe(false)
+    expect(item(container, 'deleteTable')!.disabled).toBe(false)
+    expect(commandsIn(container, 'Table')).toHaveLength(7)
+
+    await click(item(container, 'deleteRow')!)
+    expect(grid(editor)).toEqual({ cells: [['a']], header: true })
+  })
+
+  it('has no table section outside a table, and no Turn into inside one', async () => {
+    const outside = await openAt(`words\n\n${TABLE}`, 'words')
+    expect(controlsIn(outside.container)).not.toBeNull()
+    expect(commandsIn(outside.container, 'Table')).toEqual([])
+    expect(commandsIn(outside.container, 'Turn into')).not.toEqual([])
+    cleanup()
+
+    const inside = await openAt(`words\n\n${TABLE}`, '2')
+    expect(commandsIn(inside.container, 'Table')).toHaveLength(7)
+    expect(commandsIn(inside.container, 'Turn into')).toEqual([])
+  })
+
+  // The common case: the pointer is over a table the cursor is not in. The
+  // handle has to bring the cursor into the table, or the table commands are
+  // unreachable exactly when someone reaches for them.
+  it('moves the cursor into a table it was not in, and shows the table section', async () => {
+    const { editor, container } = await open(`words\n\n${TABLE}`, false)
+    await caretAt(editor, posOf(editor, 'words'))
+    const tableAt = editor.state.doc.child(1)
+    expect(tableAt.type.name).toBe('table')
+    const over = editor.state.doc.child(0).nodeSize + 1
+    const hover = vi
+      .spyOn(editor.view, 'posAtCoords')
+      .mockReturnValue({ pos: over, inside: -1 })
+    await act(async () => {
+      container
+        .querySelector('.editor')!
+        .dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    })
+    hover.mockRestore()
+
+    await click(container.querySelector('.block-handle') as HTMLElement)
+
+    expect(editor.state.selection.$from.parent.textContent).toBe('a')
+    expect(commandsIn(container, 'Table')).toHaveLength(7)
+    await run(container, 'addRowAfter')
+    expect(grid(editor)!.cells).toEqual([['a', 'b'], ['', ''], ['1', '2']])
+  })
+
+  it('does not open while the formula source field is open', async () => {
+    const { editor, container } = await open('pick me $x^2$ here', false)
+    await caretAt(editor, 2)
+    await act(async () => {
+      container
+        .querySelector('[data-type="inline-math"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(container.querySelector('.math-source')).not.toBeNull()
+
+    await click(container.querySelector('.block-handle') as HTMLElement)
+
+    expect(controlsIn(container)).toBeNull()
+  })
+
+  it('closes the bubble menu and keeps it shut while open', async () => {
+    const { editor, container } = await open('bold me please', false)
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection({ from: 1, to: 5 })
+    })
+    // TipTap focuses on the next animation frame. A focus still pending when
+    // the menu opens takes the focus back out of it, and the menu closes on
+    // that blur — which made this fail when run on its own.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+    expect(container.querySelector('.bubble-menu')).not.toBeNull()
+
+    await click(container.querySelector('.block-handle') as HTMLElement)
+    expect(controlsIn(container)).not.toBeNull()
+    expect(container.querySelector('.bubble-menu')).toBeNull()
+
+    await act(async () => {
+      editor.commands.setTextSelection({ from: 6, to: 8 })
+    })
+    expect(container.querySelector('.bubble-menu')).toBeNull()
+  })
+
+  it('keeps `n` off the window, and Escape hands focus back to the block', async () => {
+    const { editor, container } = await openAt('alpha\n\nbeta', 'beta')
+    const menu = controlsIn(container) as HTMLElement
+    // Focus in the menu is what keeps the keys out of the document at all.
+    expect(menu.contains(document.activeElement)).toBe(true)
+    const before = editor.getMarkdown()
+
+    const seen = vi.fn()
+    window.addEventListener('keydown', seen)
+    await press(document.activeElement as HTMLElement, 'n')
+    await press(document.activeElement as HTMLElement, 'Escape')
+    window.removeEventListener('keydown', seen)
+
+    expect(seen).not.toHaveBeenCalled()
+    expect(controlsIn(container)).toBeNull()
+    expect(editor.getMarkdown()).toBe(before)
+    // TipTap's focus command lands on the next animation frame.
+    await settle()
+    expect(document.activeElement).toBe(container.querySelector('.tiptap'))
+    expect(editor.state.selection.$from.parent.textContent).toBe('beta')
+  })
+})
+
+describe('highlight button', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await i18n.changeLanguage('en')
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  const select = async (editor: TipTap, from: number, to: number) => {
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection({ from, to })
+    })
+  }
+
+  const button = (container: HTMLElement) =>
+    container.querySelector<HTMLButtonElement>('.bubble-menu [aria-label="Highlight"]')!
+
+  const press = async (container: HTMLElement) => {
+    await act(async () => {
+      button(container).click()
+    })
+  }
+
+  const runs = (editor: TipTap) => {
+    const found: string[] = []
+    editor.state.doc.descendants((node) => {
+      if (node.isText && node.marks.some((mark) => mark.type.name === 'highlight')) {
+        found.push(node.text!)
+      }
+    })
+    return found
+  }
+
+  it('applies, reflects, and removes a highlight', async () => {
+    const { editor, container } = await open('mark these words', false)
+    await select(editor, 6, 11)
+    expect(button(container).getAttribute('aria-pressed')).toBe('false')
+
+    await press(container)
+    expect(runs(editor)).toEqual(['these'])
+    expect(button(container).getAttribute('aria-pressed')).toBe('true')
+
+    await press(container)
+    expect(runs(editor)).toEqual([])
+    expect(button(container).getAttribute('aria-pressed')).toBe('false')
+  })
+
+  // The trimming path. Plain spaces at the ends do not tell the two commands
+  // apart — the serialiser moves them outside the mark either way — but a
+  // selection across an inline formula does: the generic mark command saves
+  // `==pay ==$x$==== now`, which reopens with a literal `==` in the sentence.
+  // Asserted on what is saved and on a fresh editor built from it, because the
+  // in-memory mark exists either way.
+  it('round-trips a highlight applied across an inline formula', async () => {
+    const { editor, container } = await open('pay $x$ now', false)
+    await select(editor, 1, 7)
+
+    await press(container)
+
+    const saved = editor.getMarkdown()
+    expect(saved).toBe('==pay== $x$ now')
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    const again = new BareEditor({
+      element,
+      extensions: editorExtensions(),
+      content: saved,
+      contentType: 'markdown',
+    })
+    expect(runs(again)).toEqual(['pay'])
+    expect(again.state.doc.textContent).not.toContain('=')
+    expect(again.getMarkdown()).toBe(saved)
+    again.destroy()
+    element.remove()
+  })
+
+  // isActive judges the untrimmed selection and says no here, while pressing
+  // the button would remove the mark. The pressed state has to agree with
+  // what pressing does.
+  it('shows as pressed over a highlight selected with a trailing space', async () => {
+    const { editor, container } = await open('mark ==these== words', false)
+    await select(editor, 6, 12)
+
+    expect(button(container).getAttribute('aria-pressed')).toBe('true')
+    await press(container)
+    expect(runs(editor)).toEqual([])
+  })
+})
+
+describe('block controls placement', () => {
+  beforeEach(async () => {
+    await db.notes.clear()
+    await i18n.changeLanguage('en')
+  })
+
+  afterEach(() => {
+    cleanup()
+  })
+
+  const BODY = 'alpha\n\nbeta\n\n> one\n>\n> two\n>\n> three'
+
+  // jsdom has no layout, so every position measures as 0 and a test could not
+  // tell one block's controls from another's. Ten pixels per position gives
+  // each block its own height, and the handle's top says which it is beside.
+  const layout = (editor: TipTap) =>
+    vi.spyOn(editor.view, 'coordsAtPos').mockImplementation((pos) => ({
+      top: pos * 10,
+      bottom: pos * 10 + 10,
+      left: 0,
+      right: 0,
+    }))
+
+  const posOf = (editor: TipTap, text: string) => {
+    let found = -1
+    editor.state.doc.descendants((node, pos) => {
+      if (found === -1 && node.isText && node.text!.includes(text)) {
+        found = pos + node.text!.indexOf(text)
+      }
+    })
+    return found
+  }
+
+  // Where the controls belong for the index-th top-level block: its first
+  // position inside, which is what anchorAt measures.
+  const topOf = (editor: TipTap, index: number) =>
+    (editor.state.doc.resolve(0).posAtIndex(index, 0) + 1) * 10
+
+  const handleTop = (container: HTMLElement) => {
+    const handle = container.querySelector<HTMLElement>('.block-handle')!
+    const add = container.querySelector<HTMLElement>('.block-add')!
+    expect(add.style.top).toBe(handle.style.top)
+    return parseFloat(handle.style.top)
+  }
+
+  const surface = (container: HTMLElement) => container.querySelector('.editor')!
+
+  const hover = async (container: HTMLElement, editor: TipTap, pos: number) => {
+    const at = vi.spyOn(editor.view, 'posAtCoords').mockReturnValue({ pos, inside: -1 })
+    await act(async () => {
+      surface(container).dispatchEvent(new MouseEvent('mousemove', { bubbles: true }))
+    })
+    at.mockRestore()
+  }
+
+  // React builds mouseleave out of mouseout with a target outside the element.
+  const leave = async (container: HTMLElement) => {
+    await act(async () => {
+      surface(container).dispatchEvent(
+        new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }),
+      )
+    })
+  }
+
+  const caretAt = async (editor: TipTap, pos: number) => {
+    await act(async () => {
+      editor.commands.focus(null, SILENT)
+      editor.commands.setTextSelection(pos)
+    })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+  }
+
+  const click = async (element: HTMLElement) => {
+    await act(async () => {
+      element.click()
+    })
+  }
+
+  it('sits beside the hovered block, moves with the pointer, and ignores typing', async () => {
+    const { editor, container } = await open(BODY, false)
+    layout(editor)
+    await caretAt(editor, posOf(editor, 'alpha') + 2)
+
+    await hover(container, editor, posOf(editor, 'beta'))
+    expect(handleTop(container)).toBe(topOf(editor, 1))
+
+    await hover(container, editor, posOf(editor, 'one'))
+    expect(handleTop(container)).toBe(topOf(editor, 2))
+
+    // Typed above the hovered quote, which pushes it down by three. The stored
+    // position has to move with it, or it now points into beta.
+    await act(async () => {
+      type(editor, 'xyz')
+    })
+    expect(editor.state.doc.firstChild!.textContent).toBe('alxyzpha')
+    expect(handleTop(container)).toBe(topOf(editor, 2))
+  })
+
+  // A paragraph and a quote of several lines both put the controls at their
+  // first line, wherever inside them the pointer is.
+  it('aligns to the top of the hovered block, not the line under the pointer', async () => {
+    const { editor, container } = await open(BODY, false)
+    layout(editor)
+
+    await hover(container, editor, posOf(editor, 'three') + 2)
+
+    expect(handleTop(container)).toBe(topOf(editor, 2))
+    expect(handleTop(container)).not.toBe((posOf(editor, 'three') + 2) * 10)
+  })
+
+  it('follows the cursor once the pointer leaves the editor', async () => {
+    const { editor, container } = await open(BODY, false)
+    layout(editor)
+    await caretAt(editor, posOf(editor, 'beta'))
+    expect(handleTop(container)).toBe(topOf(editor, 1))
+
+    await hover(container, editor, posOf(editor, 'two'))
+    expect(handleTop(container)).toBe(topOf(editor, 2))
+
+    await leave(container)
+    expect(handleTop(container)).toBe(topOf(editor, 1))
+
+    await caretAt(editor, posOf(editor, 'alpha'))
+    expect(handleTop(container)).toBe(topOf(editor, 0))
+  })
+
+  // Both menus put the cursor in their block, so the pointer is not the only
+  // thing to hold off: the cursor moving while a menu is open — a pull
+  // replacing the note does that — must not take the controls with it either.
+  it.each([
+    ['block options', '.block-handle'],
+    ['insert block', '.block-add'],
+  ])('stays beside the block the %s menu was opened on', async (_name, trigger) => {
+    const { editor, container } = await open(BODY, false)
+    layout(editor)
+    await caretAt(editor, posOf(editor, 'alpha'))
+    await hover(container, editor, posOf(editor, 'beta'))
+    await click(container.querySelector(trigger) as HTMLElement)
+    expect(container.querySelector('.block-controls, .block-menu')).not.toBeNull()
+
+    await hover(container, editor, posOf(editor, 'three'))
+    expect(handleTop(container)).toBe(topOf(editor, 1))
+
+    await act(async () => {
+      editor.commands.setTextSelection(posOf(editor, 'alpha'))
+    })
+    expect(handleTop(container)).toBe(topOf(editor, 1))
+
+    await leave(container)
+    expect(handleTop(container)).toBe(topOf(editor, 1))
+
+    // With the pointer gone the controls would otherwise follow the cursor.
+    await act(async () => {
+      editor.commands.setTextSelection(posOf(editor, 'two'))
+    })
+    expect(handleTop(container)).toBe(topOf(editor, 1))
+    expect(container.querySelector('.block-controls, .block-menu')).not.toBeNull()
+  })
+
+  // A menu opened against a document a pull has since replaced would act on
+  // whatever block the cursor was clamped into, which is not the one it sits
+  // beside. The hovered position belongs to the old document as well.
+  it.each([
+    ['block options', '.block-handle'],
+    ['insert block', '.block-add'],
+  ])('closes the %s menu when a pull replaces the note', async (_name, trigger) => {
+    const { editor, container } = await open('alpha\n\nbeta', false)
+    layout(editor)
+    await caretAt(editor, posOf(editor, 'beta') + 2)
+    await hover(container, editor, posOf(editor, 'beta') + 2)
+    await click(container.querySelector(trigger) as HTMLElement)
+    expect(container.querySelector('.block-controls, .block-menu')).not.toBeNull()
+
+    await remoteChange('omega')
+    await settle()
+
+    expect(editor.getMarkdown()).toBe('omega')
+    expect(editor.state.selection.$from.parent.textContent).toBe('omega')
+    expect(container.querySelector('.block-controls, .block-menu')).toBeNull()
+    // Already beside the block the cursor was clamped into, not left where
+    // the menu was until something else moves them.
+    expect(handleTop(container)).toBe(topOf(editor, 0))
+
+    await remoteChange('one\n\ntwo\n\nthree')
+    await settle()
+    await caretAt(editor, posOf(editor, 'one'))
+    expect(handleTop(container)).toBe(topOf(editor, 0))
+  })
+
+  // A jump, not a slide. Read through the real stylesheet so a transition
+  // added to either rule, or to a rule that also matches them, is caught.
+  it('does not animate the controls between blocks', async () => {
+    const style = document.createElement('style')
+    style.textContent = CSS
+    document.head.appendChild(style)
+    const { container } = await open(BODY, false)
+
+    for (const selector of ['.block-handle', '.block-add']) {
+      const computed = getComputedStyle(container.querySelector(selector)!)
+      expect(['', 'none', '0s', 'all 0s ease 0s']).toContain(computed.transition)
+    }
+    style.remove()
+  })
+})
+
+describe('line breaks', () => {
+  const build = (content: string) => {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    return new BareEditor({
+      element,
+      extensions: editorExtensions(),
+      content,
+      contentType: 'markdown',
+    })
+  }
+
+  // Through the same handleKeyDown chain a real key goes through, so the
+  // priority between this binding and StarterKit's is what is under test.
+  const enter = (editor: TipTap, shiftKey = false) =>
+    editor.view.someProp('handleKeyDown', (f) =>
+      f(
+        editor.view,
+        new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, shiftKey }),
+      ),
+    )
+
+  const typeAt = (editor: TipTap, text: string) => {
+    for (const char of text) type(editor, char)
+  }
+
+  // Each top-level block as its type and text, with [br] for a line break, so
+  // a break and a block boundary cannot be mistaken for each other.
+  const shape = (editor: TipTap) => {
+    const blocks: string[] = []
+    editor.state.doc.forEach((block) => {
+      let text = ''
+      block.descendants((node) => {
+        if (node.type.name === 'hardBreak') text += '[br]'
+        else if (node.isText) text += node.text
+        else if (node.isTextblock && text !== '') text += '|'
+      })
+      blocks.push(`${block.type.name}:${text}`)
+    })
+    return blocks
+  }
+
+  const reopened = (editor: TipTap) => {
+    const again = build(editor.getMarkdown())
+    const blocks = shape(again)
+    again.destroy()
+    return blocks
+  }
+
+  const endOf = (editor: TipTap) => editor.state.doc.content.size - 1
+
+  it('breaks the line on Enter in a paragraph, and saves it as a trailing backslash', () => {
+    const editor = build('one')
+    editor.commands.setTextSelection(endOf(editor))
+
+    enter(editor)
+    typeAt(editor, 'two')
+
+    expect(shape(editor)).toEqual(['paragraph:one[br]two'])
+    expect(editor.getMarkdown()).toBe('one\\\ntwo')
+    expect(reopened(editor)).toEqual(['paragraph:one[br]two'])
+  })
+
+  it('starts a new block on Shift+Enter in a paragraph', () => {
+    const editor = build('one')
+    editor.commands.setTextSelection(endOf(editor))
+
+    enter(editor, true)
+    typeAt(editor, 'two')
+
+    expect(shape(editor)).toEqual(['paragraph:one', 'paragraph:two'])
+  })
+
+  // The iPad's on-screen keyboard does not reliably send Shift with Return,
+  // so this is the only way to a new block there.
+  it('turns Enter on an empty line into a new block, dropping the break', () => {
+    const atEnd = build('one')
+    atEnd.commands.setTextSelection(endOf(atEnd))
+    enter(atEnd)
+    enter(atEnd)
+    typeAt(atEnd, 'two')
+    expect(shape(atEnd)).toEqual(['paragraph:one', 'paragraph:two'])
+
+    // An empty line between two others: both breaks around it go, and the
+    // block boundary takes their place.
+    const between = build('one\\\n\\\nthree')
+    expect(shape(between)).toEqual(['paragraph:one[br][br]three'])
+    between.commands.setTextSelection(5)
+    enter(between)
+    expect(shape(between)).toEqual(['paragraph:one', 'paragraph:three'])
+  })
+
+  it('leaves a quote the way it always did, through an empty paragraph', () => {
+    const editor = build('> quoted')
+    editor.commands.setTextSelection(endOf(editor) - 1)
+
+    enter(editor)
+    enter(editor)
+    expect(shape(editor)).toEqual(['blockquote:quoted|', 'paragraph:'])
+    enter(editor)
+    typeAt(editor, 'out')
+
+    expect(shape(editor)).toEqual(['blockquote:quoted', 'paragraph:out', 'paragraph:'])
+  })
+
+  // A markdown heading is one line: `# tit\` + `le` reopens as a heading and
+  // a paragraph. So neither key may put a break in one. The trailing empty
+  // paragraph is StarterKit's, after any document that ends in a heading.
+  it.each([false, true])('starts a new block from a heading, shift %s', (shift) => {
+    const editor = build('# title')
+    editor.commands.setTextSelection(4)
+
+    enter(editor, shift)
+
+    expect(shape(editor)).toEqual(['heading:tit', 'heading:le', 'paragraph:'])
+  })
+
+  it('leaves list items, code blocks and table cells as they were', () => {
+    const list = build('- item')
+    list.commands.setTextSelection(endOf(list) - 1)
+    enter(list)
+    typeAt(list, 'next')
+    expect(shape(list)).toEqual(['bulletList:item|next', 'paragraph:'])
+    enter(list, true)
+    expect(shape(list)).toEqual(['bulletList:item|next[br]', 'paragraph:'])
+
+    const code = build('```\nx\n```')
+    code.commands.setTextSelection(2)
+    enter(code)
+    expect(code.state.doc.firstChild!.textContent).toBe('x\n')
+
+    const table = build('| a | b |\n| --- | --- |\n| 1 | 2 |')
+    table.commands.setTextSelection(5)
+    enter(table)
+    expect(shape(table)[0]).toBe('table:a||b|1|2')
+  })
+
+  it('reads a two-space break as a break and saves it with a backslash', () => {
+    const editor = build('one  \ntwo')
+
+    expect(shape(editor)).toEqual(['paragraph:one[br]two'])
+    expect(editor.getMarkdown()).toBe('one\\\ntwo')
+  })
+
+  // A backslash that ends a paragraph is a literal backslash, so a break left
+  // at the end — which is where the cursor sits after Enter — is not saved.
+  it('does not save a break at the end of a paragraph', () => {
+    const editor = build('one\n\nnext')
+    editor.commands.setTextSelection(4)
+    enter(editor)
+
+    expect(shape(editor)).toEqual(['paragraph:one[br]', 'paragraph:next'])
+    expect(editor.getMarkdown()).toBe('one\n\nnext')
+    expect(reopened(editor)).toEqual(['paragraph:one', 'paragraph:next'])
+  })
+
+  // After a break the next line is still inside the paragraph, and a line
+  // that starts like a list, a heading or a setext underline would end it on
+  // the way back in: `a\` + `- b` reopens as a paragraph and a list.
+  it.each(['- b', '+ b', '* b', '1. b', '2) b', '# b', '###', '=', '---', '> b', '- [ ] b'])(
+    'keeps %j after a break as text through a save',
+    (line) => {
+      const editor = build('a')
+      editor.commands.setTextSelection(2)
+      enter(editor)
+      editor.commands.insertContent({ type: 'text', text: line })
+
+      expect(shape(editor)).toEqual([`paragraph:a[br]${line}`])
+      expect(reopened(editor)).toEqual([`paragraph:a[br]${line}`])
+    },
+  )
+
+  it('keeps a break inside a table cell inside the table', () => {
+    const editor = build('| a | b |\n| --- | --- |\n| 1 | 2 |')
+    editor.commands.setTextSelection(5)
+    enter(editor, true)
+    typeAt(editor, 'x')
+
+    expect(shape(editor)).toEqual(['table:a[br]x|b|1|2', 'paragraph:'])
+    expect(reopened(editor)).toEqual(['table:a[br]x|b|1|2', 'paragraph:'])
+
+    // A cell holding two paragraphs is written without the paragraph
+    // renderer, straight from the table's, so it is its own case.
+    enter(editor)
+    enter(editor, true)
+    typeAt(editor, 'y')
+    expect(editor.getMarkdown()).not.toContain('\\<br>')
+    expect(reopened(editor)[0]).toContain('[br]y')
+    expect(reopened(editor)[0]).not.toContain('<br>')
+  })
+
+  describe('markdown rules after a break', () => {
+    // Everything the stock rules turn into a block at the start of a
+    // paragraph. `- [ ] ` is absent on purpose: the stock rules make it a
+    // bullet whose text is `[ ] `, and a line after a break does the same.
+    const MARKERS = ['- ', '+ ', '* ', '1. ', '3. ', '> ', '# ', '## ', '### ', '#### ', '##### ', '###### ', '[ ] ', '[x] ']
+
+    // What the stock rules make of `typed` at the start of the paragraph `zz`.
+    const atBlockStart = (typed: string) => {
+      const editor = build('first\n\nzz')
+      editor.commands.setTextSelection(8)
+      typeAt(editor, typed)
+      const content = editor.getJSON().content!.slice(0, 2)
+      editor.destroy()
+      return content
+    }
+
+    // The same, typed on the line after a break: `first` + break + `zz`.
+    const afterBreak = (typed: string, after = '') => {
+      const editor = build(`first\\\nzz${after}`)
+      expect(shape(editor)[0]).toBe('paragraph:first[br]zz')
+      editor.commands.setTextSelection(7)
+      typeAt(editor, typed)
+      return editor
+    }
+
+    const backspace = (editor: TipTap) =>
+      editor.view.someProp('handleKeyDown', (f) =>
+        f(editor.view, new KeyboardEvent('keydown', { key: 'Backspace', keyCode: 8 })),
+      )
+
+    it.each(MARKERS)('turns %j after a break into the block it makes at a block start', (marker) => {
+      const editor = afterBreak(`${marker}x`)
+
+      expect(editor.getJSON().content!.slice(0, 2)).toEqual(atBlockStart(`${marker}x`))
+    })
+
+    it.each(['a - b', 'x + y', 'x * y', 'x 1. y', 'see # 3', 'a > b', 'a [ ] b'])(
+      'leaves %j alone, because the marker is not at the start of the line',
+      (typed) => {
+        const editor = afterBreak(typed)
+
+        expect(shape(editor)).toEqual([`paragraph:first[br]${typed}zz`])
+      },
+    )
+
+    it.each(['####### ', '1) ', '- [ ] '])('does what a block start does with %j', (typed) => {
+      const editor = afterBreak(typed)
+      const expected = atBlockStart(typed)
+
+      expect(editor.getJSON().content![0]!.type).toBe('paragraph')
+      if (expected[1]!.type === 'paragraph') {
+        expect(shape(editor)).toEqual([`paragraph:first[br]${typed}zz`])
+      } else {
+        expect(editor.getJSON().content!.slice(0, 2)).toEqual(expected)
+      }
+    })
+
+    // The stock rules at the start of a paragraph, undone: the marker is now
+    // the paragraph's own first text, and unescaped `- zz` reopens as a list.
+    // Not the last block, for the reason the Backspace tests above give.
+    it.each(MARKERS)('keeps a literal %j at the start of a paragraph through a save', (marker) => {
+      const editor = build('first\n\nzz\n\nlast')
+      editor.commands.setTextSelection(8)
+      typeAt(editor, marker)
+      expect(shape(editor)[1]).not.toBe('paragraph:zz')
+
+      backspace(editor)
+
+      const literal = ['paragraph:first', `paragraph:${marker}zz`, 'paragraph:last']
+      expect(shape(editor)).toEqual(literal)
+      expect(reopened(editor)).toEqual(literal)
+    })
+
+    // A soft line break in markdown written elsewhere stays a newline in the
+    // text, and the editor shows it as a new line, so a marker there opens one.
+    it('treats a newline kept from imported markdown as a line start too', () => {
+      const editor = build('first\nzz\n\nlast')
+      expect(editor.state.doc.firstChild!.textContent).toBe('first\nzz')
+      editor.commands.setTextSelection(7)
+
+      typeAt(editor, '- ')
+
+      expect(shape(editor)).toEqual(['paragraph:first', 'bulletList:zz', 'paragraph:last'])
+    })
+
+    // Nothing before the break means nothing to keep: no empty paragraph is
+    // left above the new block.
+    it('leaves no empty paragraph when the break opens the paragraph', () => {
+      const editor = build('zz\n\nlast')
+      editor.commands.setTextSelection(1)
+      editor.commands.setHardBreak()
+      expect(shape(editor)[0]).toBe('paragraph:[br]zz')
+
+      typeAt(editor, '- ')
+
+      expect(shape(editor)).toEqual(['bulletList:zz', 'paragraph:last'])
+    })
+
+    // A break there comes from Shift+Enter, and splitting a list item or a
+    // cell is not what this rule does.
+    it('fires only in a paragraph of its own, not in a list item or a table cell', () => {
+      const list = build('- item')
+      list.commands.setTextSelection(endOf(list) - 1)
+      enter(list, true)
+      typeAt(list, '- x')
+      expect(shape(list)[0]).toBe('bulletList:item[br]- x')
+
+      const table = build('| a | b |\n| --- | --- |\n| 1 | 2 |')
+      table.commands.setTextSelection(5)
+      enter(table, true)
+      typeAt(table, '# x')
+      expect(shape(table)[0]).toBe('table:a[br]# x|b|1|2')
+    })
+
+    // One Backspace, as for the stock rules and the highlight rule: someone
+    // who meant the marker literally gets it back, break and all, and it is
+    // still literal when the note is opened again. Not the last block: at the
+    // end of a note StarterKit appends a paragraph straight after any rule,
+    // and that transaction clears what Backspace would undo — for the stock
+    // rules exactly as for these.
+    it.each(MARKERS)('gives back the break and a literal %j on one Backspace', (marker) => {
+      const editor = afterBreak(marker, '\n\nlast')
+      expect(shape(editor)[0]).toBe('paragraph:first')
+
+      backspace(editor)
+
+      expect(shape(editor)).toEqual([`paragraph:first[br]${marker}zz`, 'paragraph:last'])
+      expect(reopened(editor)).toEqual([`paragraph:first[br]${marker}zz`, 'paragraph:last'])
+    })
   })
 })

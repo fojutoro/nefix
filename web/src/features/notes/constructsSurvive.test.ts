@@ -73,7 +73,9 @@ const SURVIVES: Record<string, string> = {
   'task list': '- [ ] undone\n- [x] done',
   'blockquote': '> quoted line\n> second line',
   'thematic break': 'above\n\n---\n\nbelow',
-  'hard break': 'line one  \nline two',
+  // Saved with a backslash; the two-space form still reads, and is rewritten
+  // on save — see 'line breaks' in Editor.test.tsx.
+  'hard break': 'line one\\\nline two',
   'link': 'A [link](https://example.com) here.',
   'image': '![alt text](https://example.com/a.png)',
   'inline maths': 'Inline $x^2$ math.',

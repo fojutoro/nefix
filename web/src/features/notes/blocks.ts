@@ -1,4 +1,5 @@
 import type { Editor as TipTap } from '@tiptap/core'
+import { Selection } from '@tiptap/pm/state'
 
 // The document never loses focus while a command runs and the block it acts on
 // is on screen by definition, so there is nothing to scroll to. Same reasoning
@@ -129,6 +130,81 @@ export const BLOCKS: BlockCommand[] = [
     },
   },
 ]
+
+// Not in BLOCKS: a paragraph is what the + inserts before running any of them,
+// so offering it there would be a command that does nothing. clearNodes rather
+// than setParagraph, so a quote turned into a paragraph leaves the quote.
+const PARAGRAPH: BlockCommand = {
+  id: 'paragraph',
+  labelKey: 'editor.paragraph',
+  keywords: ['paragraph', 'text'],
+  run: (editor) => {
+    editor.chain().focus(null, KEEP).clearNodes().run()
+  },
+}
+
+const CONVERTIBLE = ['heading1', 'heading2', 'heading3', 'blockquote', 'codeBlock']
+
+export const TURN_INTO: BlockCommand[] = [
+  PARAGRAPH,
+  ...BLOCKS.filter((command) => CONVERTIBLE.includes(command.id)),
+]
+
+// The top-level node the selection is in: the block the handle stands beside,
+// and the same one the + inserts under.
+function topBlock(editor: TipTap) {
+  const { doc, selection } = editor.state
+  const { $from } = selection
+  const index = Math.min($from.index(0), doc.childCount - 1)
+  const from = $from.posAtIndex(index, 0)
+  const node = doc.child(index)
+  return { index, node, from, to: from + node.nodeSize, offset: selection.from - from }
+}
+
+export function deleteBlock(editor: TipTap) {
+  const { from, to } = topBlock(editor)
+  const { doc, schema } = editor.state
+  editor
+    .chain()
+    .focus(null, KEEP)
+    .command(({ tr }) => {
+      // The document may not be empty, so the last block leaves an empty
+      // paragraph behind rather than a transaction ProseMirror has to repair.
+      if (doc.childCount === 1) tr.replaceWith(from, to, schema.nodes.paragraph!.create())
+      else tr.delete(from, to)
+      tr.setSelection(Selection.near(tr.doc.resolve(Math.min(from, tr.doc.content.size))))
+      return true
+    })
+    .run()
+}
+
+export function duplicateBlock(editor: TipTap) {
+  const { node, to } = topBlock(editor)
+  editor.chain().focus(null, KEEP).insertContentAt(to, node.toJSON()).run()
+}
+
+export function canShiftBlock(editor: TipTap, delta: -1 | 1) {
+  const target = topBlock(editor).index + delta
+  return target >= 0 && target < editor.state.doc.childCount
+}
+
+// Swaps with the neighbour and keeps the cursor where it was inside the block,
+// so moving twice in a row moves the same block twice.
+export function shiftBlock(editor: TipTap, delta: -1 | 1) {
+  if (!canShiftBlock(editor, delta)) return
+  const { index, node, from, to, offset } = topBlock(editor)
+  const neighbour = editor.state.doc.child(index + delta)
+  const at = delta === 1 ? from + neighbour.nodeSize : from - neighbour.nodeSize
+  editor
+    .chain()
+    .focus(null, KEEP)
+    .command(({ tr }) => {
+      tr.delete(from, to).insert(at, node)
+      tr.setSelection(Selection.near(tr.doc.resolve(at + offset)))
+      return true
+    })
+    .run()
+}
 
 // Matched against the translated label and the English keywords together, so
 // the list narrows the same way in either language.

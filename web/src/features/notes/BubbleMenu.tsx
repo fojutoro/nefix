@@ -21,6 +21,7 @@ const ALT = APPLE ? '⌥' : 'Alt+'
 const MARKS = [
   { name: 'bold', glyph: 'B', keys: `${MOD}B` },
   { name: 'italic', glyph: 'I', keys: `${MOD}I` },
+  { name: 'highlight', glyph: '==', keys: `${MOD}${SHIFT}H` },
   { name: 'strike', glyph: 'S', keys: `${MOD}${SHIFT}S` },
   { name: 'code', glyph: '<>', keys: `${MOD}E` },
 ] as const
@@ -35,6 +36,10 @@ type Props = {
   // the top of the pane for the menu to fit above.
   below: boolean
   link: boolean
+  // Worked out by Editor.tsx on the trimmed selection, which isActive does not
+  // know about: a selection with a trailing space reads as not highlighted
+  // there while toggleHighlight would remove the mark.
+  highlighted: boolean
   onLink: (open: boolean) => void
   onMath: () => void
   ref?: Ref<HTMLDivElement>
@@ -49,6 +54,7 @@ export default function BubbleMenu({
   left,
   below,
   link,
+  highlighted,
   onLink,
   onMath,
   ref,
@@ -106,9 +112,17 @@ export default function BubbleMenu({
               key={name}
               type="button"
               aria-label={t(`editor.${name}`)}
-              aria-pressed={editor.isActive(name)}
+              aria-pressed={name === 'highlight' ? highlighted : editor.isActive(name)}
               title={`${t(`editor.${name}`)} (${keys})`}
-              onClick={() => editor.chain().focus(null, KEEP).toggleMark(name).run()}
+              onClick={() => {
+                const chain = editor.chain().focus(null, KEEP)
+                // toggleHighlight, never toggleMark('highlight'): the generic
+                // command skips the trimming, and a highlight that starts or
+                // ends on a space saves as `== a ==` and reopens as literal
+                // text. #68 tracks the other paths that still bypass it.
+                if (name === 'highlight') chain.toggleHighlight().run()
+                else chain.toggleMark(name).run()
+              }}
             >
               {glyph}
             </button>
