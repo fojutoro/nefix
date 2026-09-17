@@ -1,7 +1,22 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { Editor as TipTap, InputRule, Mark, PasteRule } from '@tiptap/core'
-import type { MarkType, Node as ProseMirrorNode } from '@tiptap/pm/model'
-import { TextSelection, type Transaction } from '@tiptap/pm/state'
+import {
+  Editor as TipTap,
+  Extension,
+  InputRule,
+  Mark,
+  PasteRule,
+  flattenExtensions,
+  type ChainedCommands,
+  getExtensionField,
+  type Node as TipTapNode,
+} from '@tiptap/core'
+import type { MarkType, Node as ProseMirrorNode, ResolvedPos } from '@tiptap/pm/model'
+import {
+  Selection,
+  TextSelection,
+  type EditorState,
+  type Transaction,
+} from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import {
@@ -9,7 +24,7 @@ import {
   InlineMath,
   type BlockMathOptions,
 } from '@tiptap/extension-mathematics'
-import { TableKit } from '@tiptap/extension-table'
+import { Table, TableKit } from '@tiptap/extension-table'
 import { TaskList } from '@tiptap/extension-list/task-list'
 import { TaskItem } from '@tiptap/extension-list/task-item'
 import Image from '@tiptap/extension-image'
@@ -18,6 +33,7 @@ import { observeDeadlines } from '../../db/deadlines.ts'
 import { observeNote } from '../../db/notes.ts'
 import BubbleMenu from './BubbleMenu.tsx'
 import BlockMenu from './BlockMenu.tsx'
+import BlockControls from './BlockControls.tsx'
 import { KEEP, filterBlocks, type Labelled, type Translate } from './blocks.ts'
 import { findMath } from './math.ts'
 import {
@@ -186,6 +202,26 @@ const unwrapHighlight =
     tr.removeStoredMark(type)
   }
 
+// Judged on the trimmed selection, so a selection taken with its spaces reads
+// as highlighted, and toggles off, exactly like one taken without them. The
+// bubble menu's pressed state asks this too, or a double-click that picked up
+// a trailing space shows the button off while pressing it removes the mark.
+function highlightCovered(state: EditorState) {
+  const type = state.schema.marks.highlight
+  let text = false
+  let covered = true
+  for (const { $from, $to } of state.selection.ranges) {
+    const ends = trimmed(state.doc, $from.pos, $to.pos)
+    if (ends === null || type === undefined) continue
+    state.doc.nodesBetween(ends[0], ends[1], (node) => {
+      if (!node.isText) return
+      text = true
+      if (!type.isInSet(node.marks)) covered = false
+    })
+  }
+  return text && covered
+}
+
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     highlight: {
@@ -263,24 +299,10 @@ const Highlight = Mark.create({
         () =>
         ({ commands }) =>
           commands.unsetMark(this.name),
-      // Judged on the trimmed selection, so a selection taken with its spaces
-      // toggles off exactly like one taken without them.
       toggleHighlight:
         () =>
-        ({ state, commands }) => {
-          let text = false
-          let covered = true
-          for (const { $from, $to } of state.selection.ranges) {
-            const ends = trimmed(state.doc, $from.pos, $to.pos)
-            if (ends === null) continue
-            state.doc.nodesBetween(ends[0], ends[1], (node) => {
-              if (!node.isText) return
-              text = true
-              if (!this.type.isInSet(node.marks)) covered = false
-            })
-          }
-          return text && covered ? commands.unsetHighlight() : commands.setHighlight()
-        },
+        ({ state, commands }) =>
+          highlightCovered(state) ? commands.unsetHighlight() : commands.setHighlight(),
     }
   },
   addInputRules() {
@@ -291,6 +313,188 @@ const Highlight = Mark.create({
   },
   addKeyboardShortcuts() {
     return { 'Mod-Shift-h': () => this.editor.commands.toggleHighlight() }
+  },
+})
+
+// StarterKit does not export its parts, and importing
+// @tiptap/extension-hard-break directly would be a dependency package.json
+// does not declare. These are the instances StarterKit itself would load.
+function fromStarterKit(name: string) {
+  const found = flattenExtensions([StarterKit]).find((extension) => extension.name === name)
+  if (found === undefined) throw new Error(`StarterKit no longer ships ${name}`)
+  return found as TipTapNode
+}
+
+// Above zero while a table is being written. A table turns each newline in a
+// cell into `<br>`, and a backslash in front of that escapes the `<`, so a
+// break in a cell would reopen as the text "<br>". Rendering is synchronous,
+// which is what makes a counter enough.
+let renderingTable = 0
+
+const renderTable = getExtensionField<NonNullable<typeof Table.config.renderMarkdown>>(
+  Table,
+  'renderMarkdown',
+)
+
+const MarkdownTable = Table.extend({
+  renderMarkdown(node, helpers, ctx) {
+    renderingTable += 1
+    try {
+      return renderTable?.(node, helpers, ctx) ?? ''
+    } finally {
+      renderingTable -= 1
+    }
+  },
+})
+
+// A trailing backslash rather than StarterKit's two trailing spaces, which
+// nothing shows and most editors and git hooks delete: a note edited anywhere
+// else would lose its line breaks without a trace. Both read back the same.
+// Inside a table, the spaces, which the table turns into `<br>` anyway.
+const LineBreak = fromStarterKit('hardBreak').extend({
+  renderMarkdown: () => (renderingTable > 0 ? '  \n' : '\\\n'),
+})
+
+// A line that starts like a list, a heading or a setext underline is read
+// back as one: `a\` + `- b` reopens as a paragraph and a list, and so does a
+// paragraph whose own text begins `- `, which is what Backspace leaves after
+// undoing the list rule. So every line start is escaped, the first included.
+// A backslash before punctuation reads back as the punctuation, so this is
+// safe on any line, a soft break from markdown written elsewhere included.
+const escapeLineStart = (line: string) =>
+  line
+    .replace(/^(\s*)(\d{1,9})([.)])(?=\s|$)/, '$1$2\\$3')
+    .replace(/^(\s*)(#{1,6}(?=\s|$)|[-+](?=\s|$)|=+\s*$|-+\s*$)/, '$1\\$2')
+
+const paragraph = fromStarterKit('paragraph')
+const renderParagraph = getExtensionField<NonNullable<typeof paragraph.config.renderMarkdown>>(
+  paragraph,
+  'renderMarkdown',
+)
+
+const ProseParagraph = paragraph.extend({
+  renderMarkdown(node, helpers, ctx) {
+    // A backslash that ends a paragraph is a literal backslash, and the cursor
+    // sits after a trailing break every time Enter is pressed at the end of a
+    // line, so a save in that moment would reopen with `\` in the text.
+    const content = [...(node.content ?? [])]
+    while (content.at(-1)?.type === 'hardBreak') content.pop()
+    const rendered = renderParagraph?.({ ...node, content }, helpers, ctx) ?? ''
+    // A cell is one line in the file, its breaks written as `<br>`, so no
+    // line in it starts anything.
+    if (renderingTable > 0) return rendered
+    return rendered
+      .split('\n')
+      .map(escapeLineStart)
+      .join('\n')
+  },
+})
+
+// Paragraphs only, and not the paragraph inside a list item or a table cell,
+// where Enter keeps meaning the next item or the cell's own split. A heading
+// is left to the defaults too: a markdown heading is one line.
+function inProse($from: ResolvedPos) {
+  if ($from.parent.type.name !== 'paragraph') return false
+  const holder = $from.node(-1).type.name
+  return holder === 'doc' || holder === 'blockquote'
+}
+
+// The stock markdown rules only look at the start of a block, and after a line
+// break the cursor is not there, so a sentence, Enter, `- ` stayed text. The
+// text these see has the break as `\n`, and every pattern starts at it: the
+// marker has to open the line, so `a - b` stays prose. Each makes exactly what
+// the stock rule of the same pattern makes at the start of a block, and no
+// more — two markdown dialects in one editor would leave nobody able to say
+// which one they are typing in.
+const AFTER_BREAK: [RegExp, (chain: ChainedCommands, match: string[]) => ChainedCommands][] = [
+  [/\n\s*([-+*])\s$/, (chain) => chain.toggleBulletList()],
+  [
+    /\n(\d+)\.\s$/,
+    (chain, match) =>
+      chain.toggleOrderedList().updateAttributes('orderedList', { start: Number(match[1]) }),
+  ],
+  [/\n\s*>\s$/, (chain) => chain.toggleBlockquote()],
+  [/\n(#{1,6})\s$/, (chain, match) => chain.setNode('heading', { level: match[1]!.length })],
+  [
+    /\n\s*(\[([( |x])?\])\s$/,
+    (chain, match) =>
+      chain.toggleTaskList().updateAttributes('taskItem', { checked: match[2] === 'x' }),
+  ],
+]
+
+// Reported from the marker on, not from the break. The runner checks the
+// matched text against the document's own text, in which a break is nothing
+// at all, and a match that starts with `\n` never agrees with it.
+const fromMarker = (pattern: RegExp) => (text: string) => {
+  const found = pattern.exec(text)
+  if (found === null) return null
+  return { index: found.index + 1, text: found[0].slice(1), data: { groups: [...found] } }
+}
+
+const LineBreaks = Extension.create({
+  name: 'lineBreaks',
+  // Ahead of HardBreak's Shift-Enter and the core Enter, which both still run
+  // wherever these return false.
+  priority: 1000,
+  // One transaction each, which is what lets Backspace undo the rule as it
+  // undoes a stock one: the break and the literal marker come back.
+  addInputRules() {
+    return AFTER_BREAK.map(
+      ([find, makeBlock]) =>
+        new InputRule({
+          find: fromMarker(find),
+          handler: ({ state, range, match, chain }) => {
+            const $marker = state.doc.resolve(range.from)
+            if (!inProse($marker)) return null
+            // One position back is the break, or a newline kept in the text
+            // from markdown written elsewhere, which also starts a line.
+            const at = range.from - 1
+            // A break that opens the paragraph has nothing before it to keep.
+            const split = at > $marker.start()
+            const cut = chain().deleteRange({ from: at, to: range.to })
+            makeBlock(split ? cut.splitBlock() : cut, match.data!.groups as string[]).run()
+          },
+        }),
+    )
+  },
+  addKeyboardShortcuts() {
+    const newBlock = () =>
+      this.editor.commands.first(({ commands }) => [
+        () => commands.liftEmptyBlock(),
+        () => commands.splitBlock(),
+      ])
+    return {
+      Enter: () => {
+        const { $from, empty } = this.editor.state.selection
+        // An empty paragraph keeps the default, which is also how a quote is
+        // left: Enter in its empty last paragraph lifts out of it.
+        if (!inProse($from) || $from.parent.content.size === 0) return false
+        // Enter on an empty line ends the paragraph instead of adding another
+        // break. Not redundant with Shift+Enter: the iPad's on-screen keyboard
+        // does not reliably send Shift with Return, and without this an iPad
+        // has no way to start a new block at all.
+        const { nodeBefore, nodeAfter } = $from
+        if (
+          empty &&
+          nodeBefore?.type.name === 'hardBreak' &&
+          (nodeAfter === null || nodeAfter.type.name === 'hardBreak')
+        ) {
+          return this.editor
+            .chain()
+            .deleteRange({ from: $from.pos - 1, to: $from.pos + (nodeAfter === null ? 0 : 1) })
+            .splitBlock()
+            .run()
+        }
+        return this.editor.commands.setHardBreak()
+      },
+      'Shift-Enter': () => {
+        const { $from } = this.editor.state.selection
+        // A heading as well, where HardBreak's own binding would put a break
+        // into a line markdown cannot break.
+        if (inProse($from) || $from.parent.type.name === 'heading') return newBlock()
+        return false
+      },
+    }
   },
 })
 
@@ -306,6 +510,8 @@ export function editorExtensions(openMath?: OpenMath) {
     // mid-sentence and leave no way to put a caret in a link to fix its URL.
     // The modifier-aware version is handleClick below.
     StarterKit.configure({
+      hardBreak: false,
+      paragraph: false,
       link: {
         openOnClick: false,
         // The extension's default rel is 'noopener noreferrer nofollow'.
@@ -314,6 +520,9 @@ export function editorExtensions(openMath?: OpenMath) {
         HTMLAttributes: { target: '_blank', rel: 'noopener noreferrer' },
       },
     }),
+    LineBreak,
+    ProseParagraph,
+    LineBreaks,
     Markdown,
     // After Markdown, whose manager it wraps as the editor is created.
     Highlight,
@@ -321,7 +530,8 @@ export function editorExtensions(openMath?: OpenMath) {
     // handling and no UI: not eating an existing construct is not the same as
     // implementing images.
     Image,
-    TableKit,
+    TableKit.configure({ table: false }),
+    MarkdownTable,
     TaskList,
     TaskItem,
     InlineMathSource.configure({
@@ -398,6 +608,8 @@ type Blocks = {
 // before reading starts.
 const FLASH_MS = 2000
 
+type Controls = { editor: TipTap; top: number }
+
 type Props = {
   noteId: string
   initialBody: string
@@ -434,13 +646,21 @@ export default function Editor({
   // was on mount and never see it open.
   const menuNow = useRef<Menu | null>(null)
   const [anchor, setAnchor] = useState<Anchor | null>(null)
+  // A position inside the block the pointer is over, or null when the pointer
+  // is outside the editor. While it is set the controls outline that block and
+  // ignore the cursor; while it is null they follow the cursor, so they are
+  // still there for the keyboard.
+  const hovered = useRef<number | null>(null)
   const [blocks, setBlocks] = useState<Blocks | null>(null)
-  const blockEl = useRef<HTMLDivElement>(null)
   // Mirrored for the same reason menuNow is: the handlers below are captured
   // when the editor is built and would otherwise read the state as it was on
   // mount.
   const blocksNow = useRef<Blocks | null>(null)
   const editingNow = useRef<Editing | null>(null)
+  const [controls, setControls] = useState<Controls | null>(null)
+  // Mirrored for the same reason again: refresh and track must not open a
+  // second surface while this one is up.
+  const controlsNow = useRef<Controls | null>(null)
   const translate = useRef<Translate>(() => '')
   // The slash Escape dismissed. Without it the detection matches the very same
   // text on the next keystroke and the menu comes straight back, which is the
@@ -495,6 +715,11 @@ export default function Editor({
     })
   }, [edit])
 
+  const control = useCallback((next: Controls | null) => {
+    controlsNow.current = next
+    setControls(next)
+  }, [])
+
   const place = useCallback((next: Menu | null) => {
     menuNow.current = next
     setMenu(next)
@@ -512,7 +737,11 @@ export default function Editor({
     // A NodeSelection is not empty either, and clicking a formula makes one.
     // Asking only whether the selection is empty puts this menu on top of the
     // formula source field and takes the focus that field needs.
-    if (!(selection instanceof TextSelection) || selection.empty) {
+    if (
+      !(selection instanceof TextSelection) ||
+      selection.empty ||
+      controlsNow.current !== null
+    ) {
       place(null)
       return
     }
@@ -569,12 +798,16 @@ export default function Editor({
     const box = scroll.current
     if (current === null || box === null) return
     const { selection } = current.state
-    anchorAt(current, box, selection.from)
+    // Held while a menu is open: it acts on the block it was opened beside,
+    // and the controls must stay beside that block.
+    if (blocksNow.current === null && controlsNow.current === null) {
+      anchorAt(current, box, hovered.current ?? selection.from)
+    }
 
     // The + button's menu is not driven by the text and must not be closed by
     // it: opening it moves the selection, which lands right back here.
     const open = blocksNow.current
-    if (open !== null && open.slash === null) return
+    if ((open !== null && open.slash === null) || controlsNow.current !== null) return
 
     // A selection that is not empty belongs to the bubble menu, and the
     // formula source field holds the cursor this menu would cover. Neither is
@@ -683,6 +916,14 @@ export default function Editor({
     [show],
   )
 
+  const closeControls = useCallback(
+    (refocus: boolean) => {
+      control(null)
+      if (refocus) view.current?.commands.focus(null, KEEP)
+    },
+    [control],
+  )
+
   const setLinkOpen = useCallback(
     (open: boolean) => {
       const current = menuNow.current
@@ -778,7 +1019,13 @@ export default function Editor({
         refresh()
         track()
       },
-      onUpdate: ({ editor }) => {
+      onUpdate: ({ editor, transaction }) => {
+        // Text typed in a block above the hovered one pushes it down. Unmapped,
+        // the stored position lands in a different block, and the menu opened
+        // from the controls beside it acts on that one instead.
+        if (hovered.current !== null) {
+          hovered.current = transaction.mapping.map(hovered.current)
+        }
         unsaved.current = true
         latest.current.onChange(editor.getMarkdown())
         // Toggling a mark moves nothing, so selectionUpdate does not fire and
@@ -813,9 +1060,11 @@ export default function Editor({
       edit(null)
       show(null)
       place(null)
+      control(null)
     }
   }, [
     closeBlock,
+    control,
     edit,
     moveBlock,
     noteId,
@@ -855,6 +1104,15 @@ export default function Editor({
       // or forks them, and that path already works. Overwriting here is the
       // one way this can lose typing.
       if (note.dirty) return
+      // Before the content goes, so the cursor move below finds nothing open to
+      // hold the controls in place. A menu opened against the old document
+      // acts on the cursor's block, and the cursor is about to be clamped into
+      // some other block than the one the menu sits beside. The hovered
+      // position points into the old document too, and no mapping reaches a
+      // document that was replaced wholesale.
+      show(null)
+      control(null)
+      hovered.current = null
       const head = current.state.selection.from
       // emitUpdate: false is the whole of the echo-back guard. Without it the
       // update handler reports the server's own text back as something the
@@ -870,7 +1128,7 @@ export default function Editor({
       current.commands.setTextSelection(Math.min(head, end))
     })
     return () => subscription.unsubscribe()
-  }, [noteId])
+  }, [control, noteId, show])
 
   // A subscription and not a read on mount, for the reason the one above
   // watches the note: a deadline added anywhere has to light up a heading in a
@@ -948,8 +1206,28 @@ export default function Editor({
     // The cursor goes into the anchored block first, so the pointer path
     // inserts under the block the + is beside rather than under wherever the
     // cursor happened to be left.
+    control(null)
     current.commands.setTextSelection(anchor.pos)
     show({ top: anchor.top + BUTTON, left: 0, filter: '', slash: null, picked: 0 })
+  }
+
+  const openControls = () => {
+    const current = view.current
+    if (current === null || anchor === null || editingNow.current !== null) return
+    show(null)
+    const { doc, selection } = current.state
+    // Into the block the handle is beside, unless the cursor is already there:
+    // moving it would throw away the table cell it sits in, and the table
+    // commands act on that cell. Selection.near because the start of a table
+    // is not a text position, and near finds its first cell.
+    if (doc.resolve(anchor.pos).index(0) !== selection.$from.index(0)) {
+      current.commands.command(({ tr }) => {
+        tr.setSelection(Selection.near(tr.doc.resolve(anchor.pos)))
+        return true
+      })
+    }
+    control({ editor: current, top: anchor.top + BUTTON })
+    place(null)
   }
 
   const cancel = () => {
@@ -968,15 +1246,58 @@ export default function Editor({
         const box = scroll.current
         // Not while a menu is open: the anchor would crawl after the pointer
         // on its way to the menu and move the button out from under it.
-        if (current === null || box === null || blocksNow.current !== null) return
+        if (
+          current === null ||
+          box === null ||
+          blocksNow.current !== null ||
+          controlsNow.current !== null
+        ) {
+          return
+        }
         const found = current.view.posAtCoords({
           left: event.clientX,
           top: event.clientY,
         })
-        if (found !== null) anchorAt(current, box, found.pos)
+        if (found === null) return
+        hovered.current = found.pos
+        anchorAt(current, box, found.pos)
+      }}
+      onMouseLeave={() => {
+        const current = view.current
+        const box = scroll.current
+        hovered.current = null
+        if (current === null || box === null) return
+        if (blocksNow.current !== null || controlsNow.current !== null) return
+        anchorAt(current, box, current.state.selection.from)
       }}
     >
       <div ref={host} />
+      {anchor !== null && (
+        // A menu button and not a drag source, whatever the grip suggests.
+        // Dragging to reorder is out of scope; Move up and Move down in the
+        // menu are how a block moves. Wiring drag events here means building
+        // that feature, not finishing this one.
+        <button
+          type="button"
+          className="block-handle"
+          aria-label={t('editor.blockOptions')}
+          aria-haspopup="menu"
+          aria-expanded={controls !== null}
+          style={{ top: `${anchor.top}px` } as CSSProperties}
+          onMouseDown={(event) => {
+            event.preventDefault()
+          }}
+          onClick={openControls}
+        >
+          <svg width="10" height="16" viewBox="0 0 10 16" aria-hidden="true">
+            {[2, 8].flatMap((cx) =>
+              [2, 8, 14].map((cy) => (
+                <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.5" fill="currentColor" />
+              )),
+            )}
+          </svg>
+        </button>
+      )}
       {anchor !== null && (
         <button
           type="button"
@@ -995,7 +1316,6 @@ export default function Editor({
       )}
       {blocks !== null && (
         <BlockMenu
-          ref={blockEl}
           items={filterBlocks(blocks.filter, say)}
           picked={blocks.picked}
           top={blocks.top}
@@ -1007,6 +1327,9 @@ export default function Editor({
           onClose={closeBlock}
         />
       )}
+      {controls !== null && (
+        <BlockControls editor={controls.editor} top={controls.top} onClose={closeControls} />
+      )}
       {menu !== null && (
         <BubbleMenu
           ref={menuEl}
@@ -1015,6 +1338,7 @@ export default function Editor({
           left={menu.left}
           below={menu.below}
           link={menu.link}
+          highlighted={highlightCovered(menu.editor.state)}
           onLink={setLinkOpen}
           onMath={wrapMath}
         />

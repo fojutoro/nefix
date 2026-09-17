@@ -124,6 +124,11 @@ describe('deriveTitle', () => {
     ['a body of only whitespace', '   \n\t\n', UNTITLED],
     ['a body starting with a blank line', '\n\nReal title\nbody', 'Real title'],
     ['a Slovak line with diacritics', '# Šialené výsledky merania', 'Šialené výsledky merania'],
+    // A line break saves as a trailing backslash, which is not part of the text.
+    ['a first line ending in a line break', 'Lecture\\\nsecond line', 'Lecture'],
+    ['a body starting with a line break', '\\\nReal title', 'Real title'],
+    // An escaped backslash is the note's own character, and stays.
+    ['a first line ending in an escaped backslash', 'C:\\\\\nnext', 'C:\\\\'],
   ]
 
   for (const [name, body, expected] of cases) {

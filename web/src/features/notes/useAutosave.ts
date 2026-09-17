@@ -13,7 +13,10 @@ export type SaveNote = (
 // pressing Enter before typing should not cost the note its title.
 export function deriveTitle(bodyMd: string, untitled: string): string {
   for (const line of bodyMd.split('\n')) {
-    const title = line.replace(/^[#\s]+/, '').trim().slice(0, TITLE_MAX)
+    // An odd run of trailing backslashes ends in a line break, which the
+    // editor saves as a backslash; an even run is the note's own, escaped.
+    const text = /(?<!\\)(\\\\)*\\$/.test(line) ? line.slice(0, -1) : line
+    const title = text.replace(/^[#\s]+/, '').trim().slice(0, TITLE_MAX)
     if (title !== '') return title
   }
   return untitled

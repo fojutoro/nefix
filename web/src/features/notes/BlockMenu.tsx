@@ -1,4 +1,4 @@
-import { type CSSProperties, type Ref } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import type { Labelled } from './blocks.ts'
 
 type Props = {
@@ -16,7 +16,6 @@ type Props = {
   // true when the menu is closing with the focus still on it, so the document
   // needs it handed back.
   onClose: (refocus: boolean) => void
-  ref?: Ref<HTMLDivElement>
 }
 
 // Presentational, like BubbleMenu: it is told what to list, which row is
@@ -33,17 +32,25 @@ export default function BlockMenu({
   onRun,
   onMove,
   onClose,
-  ref,
 }: Props) {
+  const self = useRef<HTMLDivElement>(null)
+  // Not autoFocus, which React only honours on form controls: on this div it
+  // did nothing, the keys stayed in the document, and Escape went on to
+  // App.tsx and closed the note. The list itself rather than its first row,
+  // because the row the keys act on is `picked`, and a focus ring on row one
+  // while the arrows move the highlight would show two rows as current.
+  useEffect(() => {
+    if (focus) self.current?.focus()
+  }, [focus])
+
   return (
     <div
-      ref={ref}
+      ref={self}
       className="block-menu"
       role="listbox"
       // Focusable but not in the tab order: the menu is a transient surface
       // reached by typing `/` or pressing the button, never by tabbing to it.
       tabIndex={-1}
-      autoFocus={focus}
       style={{ top: `${top}px`, left: `${left}px` } as CSSProperties}
       onKeyDown={(event) => {
         // App.tsx listens on the window and never asks whether anyone dealt
