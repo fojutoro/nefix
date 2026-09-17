@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { Editor as TipTap, InputRule } from '@tiptap/core'
-import { TextSelection } from '@tiptap/pm/state'
+import { Editor as TipTap, InputRule, Mark, PasteRule } from '@tiptap/core'
+import type { MarkType, Node as ProseMirrorNode } from '@tiptap/pm/model'
+import { TextSelection, type Transaction } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import {
@@ -130,6 +131,169 @@ const BlockMathSource = BlockMath.extend<BlockMathSourceOptions>({
 
 export type OpenMath = (pos: number, latex: string, block: boolean) => void
 
+// `==text==`, the highlight most markdown editors read. Marked has no
+// tokeniser for it, so this carries one. Backslash escapes are taken as units
+// while looking for the closing `==`, or a `\==` saved inside a highlight would
+// close it early.
+const HIGHLIGHT = /^==(?=\S)((?:\\.|[^\\\n])+?)==(?!=)/
+
+// Typed or pasted, `==text==` becomes the mark only where the tokeniser above
+// would read it back as one: the text neither starts nor ends with a space.
+// Bold's own pattern allows the spaces, and a highlight made under it saves as
+// `== a ==` and reopens as literal text.
+const HIGHLIGHT_TYPED = /(?:^|\s)(==([^=\s](?:[^=]*[^=\s])?)==)$/
+const HIGHLIGHT_PASTED = /(?:^|\s)(==([^=\s](?:[^=]*[^=\s])?)==)/g
+
+// The one place a highlight's range is decided, so the commands, the input
+// rule and the paste rule cannot disagree about it. The tokeniser rejects a
+// highlight bounded by whitespace, so the range moves inward past whitespace
+// and past anything with no text of its own: the gap between blocks, a hard
+// break, an inline formula, which a mark does not stay on anyway (#66).
+function trimmed(
+  doc: ProseMirrorNode,
+  from: number,
+  to: number,
+): [number, number] | null {
+  const blank = (pos: number) => /^\s*$/.test(doc.textBetween(pos, pos + 1, ' ', ' '))
+  while (from < to && blank(from)) from += 1
+  while (to > from && blank(to - 1)) to -= 1
+  return from < to ? [from, to] : null
+}
+
+// Typing and pasting both arrive here. An input rule runs before the closing
+// `=` reaches the document and a paste rule after, which is why the closing
+// delimiter is cut to range.to rather than by length.
+const unwrapHighlight =
+  (type: MarkType) =>
+  ({
+    state,
+    range,
+    match,
+  }: {
+    state: { tr: Transaction }
+    range: { from: number; to: number }
+    match: RegExpMatchArray
+  }) => {
+    const [full, wrapped, text] = match
+    if (full === undefined || wrapped === undefined || text === undefined) return
+    const open = range.from + full.indexOf(wrapped)
+    const { tr } = state
+    // The closing delimiter first, so the opening one's positions still hold.
+    tr.delete(open + 2 + text.length, range.to)
+    tr.delete(open, open + 2)
+    const ends = trimmed(tr.doc, open, open + text.length)
+    if (ends !== null) tr.addMark(ends[0], ends[1], type.create())
+    tr.removeStoredMark(type)
+  }
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    highlight: {
+      setHighlight: () => ReturnType
+      unsetHighlight: () => ReturnType
+      toggleHighlight: () => ReturnType
+    }
+  }
+}
+
+// Every `=` that another `=` follows is saved with a backslash, so text that
+// was literal when saved reads back literal: `==` is written `\==`. No
+// extension hook reaches text serialisation, so this wraps
+// escapeMarkdownSyntax, an internal method of @tiptap/markdown's manager that
+// escapes \ ` * _ [ ] ~ and not `=`. TipTap is pinned exactly, and the round
+// trip in constructsSurvive.test.ts fails if an upgrade stops calling it.
+//
+// A note saved before this existed can hold a literal ==x==, and it loads as a
+// highlight: the characters are identical and no parser can tell which was
+// meant. Escaping disambiguates only what is saved from now on.
+const Highlight = Mark.create({
+  name: 'highlight',
+  parseHTML: () => [{ tag: 'mark' }],
+  renderHTML: () => ['mark', 0],
+  markdownTokenName: 'highlight',
+  markdownTokenizer: {
+    name: 'highlight',
+    level: 'inline',
+    start: (src) => src.indexOf('=='),
+    tokenize: (src, _tokens, lexer) => {
+      const match = HIGHLIGHT.exec(src)
+      if (match === null || /\s$/.test(match[1]!)) return undefined
+      return {
+        type: 'highlight',
+        raw: match[0],
+        text: match[1],
+        tokens: lexer.inlineTokens(match[1]!),
+      }
+    },
+  },
+  parseMarkdown: (token, helpers) =>
+    helpers.applyMark('highlight', helpers.parseInline(token.tokens ?? [])),
+  renderMarkdown: (node, helpers) => `==${helpers.renderChildren(node)}==`,
+  onBeforeCreate() {
+    // Cast, because the method is private in the typings. Checked, because
+    // assigning to a name the manager no longer has would do nothing at all.
+    const manager = this.editor.markdown as unknown as
+      | { escapeMarkdownSyntax?: (text: string) => string }
+      | undefined
+    const escape = manager?.escapeMarkdownSyntax
+    if (manager === undefined || typeof escape !== 'function') {
+      throw new Error(
+        'highlight: @tiptap/markdown has no escapeMarkdownSyntax, so a literal == would save unescaped',
+      )
+    }
+    manager.escapeMarkdownSyntax = (text) =>
+      escape.call(manager, text).replace(/=(?==)/g, '\\=')
+  },
+  addCommands() {
+    return {
+      setHighlight:
+        () =>
+        ({ state, tr, dispatch }) => {
+          const ranges = state.selection.ranges.flatMap(({ $from, $to }) => {
+            const ends = trimmed(state.doc, $from.pos, $to.pos)
+            return ends === null ? [] : [ends]
+          })
+          if (ranges.length === 0) return false
+          if (dispatch) {
+            for (const [from, to] of ranges) tr.addMark(from, to, this.type.create())
+          }
+          return true
+        },
+      unsetHighlight:
+        () =>
+        ({ commands }) =>
+          commands.unsetMark(this.name),
+      // Judged on the trimmed selection, so a selection taken with its spaces
+      // toggles off exactly like one taken without them.
+      toggleHighlight:
+        () =>
+        ({ state, commands }) => {
+          let text = false
+          let covered = true
+          for (const { $from, $to } of state.selection.ranges) {
+            const ends = trimmed(state.doc, $from.pos, $to.pos)
+            if (ends === null) continue
+            state.doc.nodesBetween(ends[0], ends[1], (node) => {
+              if (!node.isText) return
+              text = true
+              if (!this.type.isInSet(node.marks)) covered = false
+            })
+          }
+          return text && covered ? commands.unsetHighlight() : commands.setHighlight()
+        },
+    }
+  },
+  addInputRules() {
+    return [new InputRule({ find: HIGHLIGHT_TYPED, handler: unwrapHighlight(this.type) })]
+  },
+  addPasteRules() {
+    return [new PasteRule({ find: HIGHLIGHT_PASTED, handler: unwrapHighlight(this.type) })]
+  },
+  addKeyboardShortcuts() {
+    return { 'Mod-Shift-h': () => this.editor.commands.toggleHighlight() }
+  },
+})
+
 // Exported so the round-trip fixture builds its editor the same way this one
 // does. A construct the app supports but the extension list does not is not an
 // error anywhere — it is simply gone from the note, so the fixture has to
@@ -151,6 +315,8 @@ export function editorExtensions(openMath?: OpenMath) {
       },
     }),
     Markdown,
+    // After Markdown, whose manager it wraps as the editor is created.
+    Highlight,
     // Present so `![alt](url)` keeps its URL. There is no upload, no paste
     // handling and no UI: not eating an existing construct is not the same as
     // implementing images.

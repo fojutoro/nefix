@@ -457,6 +457,139 @@ describe('maths', () => {
   })
 })
 
+describe('highlight', () => {
+  const build = (content: string) => {
+    const element = document.createElement('div')
+    document.body.appendChild(element)
+    return new BareEditor({
+      element,
+      extensions: editorExtensions(),
+      content,
+      contentType: 'markdown',
+    })
+  }
+
+  // The text carrying the mark, run by run, so a highlight is told apart from
+  // equals signs that only look like one.
+  const highlighted = (editor: TipTap) => {
+    const runs: string[] = []
+    editor.state.doc.descendants((node) => {
+      if (node.isText && node.marks.some((mark) => mark.type.name === 'highlight')) {
+        runs.push(node.text!)
+      }
+    })
+    return runs
+  }
+
+  // The same note opened again from what was saved.
+  const reopened = (editor: TipTap) => {
+    const again = build(editor.getMarkdown())
+    const runs = highlighted(again)
+    again.destroy()
+    return runs
+  }
+
+  const typed = (text: string) => {
+    const editor = build('')
+    editor.commands.focus(null, SILENT)
+    for (const char of text) type(editor, char)
+    return editor
+  }
+
+  it('turns ==text== into a highlight as the closing == is typed, and it reopens as one', () => {
+    const editor = typed('A ==marked== word.')
+
+    expect(editor.state.doc.textContent).toBe('A marked word.')
+    expect(highlighted(editor)).toEqual(['marked'])
+    expect(editor.getMarkdown()).toBe('A ==marked== word.')
+    expect(reopened(editor)).toEqual(['marked'])
+    editor.destroy()
+  })
+
+  // The rule matches only what the reader accepts. Bold's pattern allows spaces
+  // inside the delimiters, and `== a ==` typed under it would save as a
+  // highlight that reopens as literal text.
+  it('leaves == in prose and around spaces literal, and saves it escaped', () => {
+    const prose = typed('if x == y == z')
+    expect(highlighted(prose)).toEqual([])
+    expect(prose.getMarkdown()).toBe('if x \\== y \\== z')
+    expect(reopened(prose)).toEqual([])
+    prose.destroy()
+
+    const spaced = typed('== a ==')
+    expect(highlighted(spaced)).toEqual([])
+    expect(spaced.getMarkdown()).toBe('\\== a \\==')
+    expect(reopened(spaced)).toEqual([])
+    spaced.destroy()
+  })
+
+  it('undoes the rule straight after it fires, keeping == as typed and saving it escaped', () => {
+    const editor = typed('==kept==')
+    expect(highlighted(editor)).toEqual(['kept'])
+
+    editor.commands.undoInputRule()
+
+    expect(editor.state.doc.textContent).toBe('==kept==')
+    expect(highlighted(editor)).toEqual([])
+    expect(editor.getMarkdown()).toBe('\\==kept\\==')
+    expect(reopened(editor)).toEqual([])
+    editor.destroy()
+  })
+
+  it('turns pasted ==text== into a highlight, and leaves pasted prose literal', () => {
+    const editor = build('')
+    editor.commands.focus(null, SILENT)
+
+    // jsdom has no ClipboardEvent, which pasteText builds when it is given no
+    // event. The paste path is the same with a plain one.
+    editor.view.pasteText('A ==pasted== word and x == y', new Event('paste') as ClipboardEvent)
+
+    expect(highlighted(editor)).toEqual(['pasted'])
+    expect(editor.getMarkdown()).toBe('A ==pasted== word and x \\== y')
+    expect(reopened(editor)).toEqual(['pasted'])
+    editor.destroy()
+  })
+
+  // Applied as selected, this would save as `one== two ==three` and reopen as
+  // literal text. The mark trims first, so every path that applies it does.
+  it('trims the spaces around a selection before highlighting, so it reopens as a highlight', () => {
+    const editor = build('one two three')
+    // " two ": from the space after "one" to the space before "three".
+    editor.commands.setTextSelection({ from: 4, to: 9 })
+
+    editor.commands.setHighlight()
+
+    expect(highlighted(editor)).toEqual(['two'])
+    expect(editor.getMarkdown()).toBe('one ==two== three')
+    expect(reopened(editor)).toEqual(['two'])
+    editor.destroy()
+  })
+
+  it('toggles a highlight on the selection with Mod-Shift-H', () => {
+    const editor = build('one two three')
+    editor.commands.setTextSelection({ from: 4, to: 9 })
+    // Mod is Ctrl here because jsdom reports no Mac platform; on a Mac the
+    // same binding is Cmd.
+    const press = () =>
+      editor.view.someProp('handleKeyDown', (f) =>
+        f(
+          editor.view,
+          new KeyboardEvent('keydown', { key: 'H', keyCode: 72, ctrlKey: true, shiftKey: true }),
+        ),
+      )
+
+    press()
+    expect(highlighted(editor)).toEqual(['two'])
+    expect(editor.getMarkdown()).toBe('one ==two== three')
+
+    // The same selection again, spaces and all, takes it off.
+    press()
+    expect(highlighted(editor)).toEqual([])
+    expect(editor.getMarkdown()).toBe('one two three')
+    editor.destroy()
+  })
+})
+
 // The menu is driven entirely by the editor's own selection, so every test
 // below moves the selection through commands rather than through events. That
 // is the point of the "opens from a selection change" test: a `mouseup`
