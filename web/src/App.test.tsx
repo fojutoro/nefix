@@ -110,9 +110,20 @@ window.ResizeObserver ??= NoopResizeObserver
 window.IntersectionObserver ??=
   NoopResizeObserver as unknown as typeof IntersectionObserver
 
+// The mock is one object shared by every test in the file, and the two tests
+// that simulate a pull replace what it does. clearAllMocks below clears call
+// history and not implementations, so without this a pull's implementation
+// runs under whatever test comes next and writes rows it never asked for.
+beforeEach(() => {
+  vi.mocked(sync).mockImplementation(idle)
+})
+
 describe('App', () => {
   beforeEach(async () => {
     await db.notes.clear()
+    await db.classes.clear()
+    await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)
@@ -142,7 +153,7 @@ describe('App', () => {
     const [note] = await listNotes()
     expect(note).toMatchObject({ bodyMd: '', deletedAt: null, dirty: true })
     // Creating a note opens it. There is no list left to land in.
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
     // Selecting it remembers it, which is what a reload reads back.
     await waitFor(async () =>
       expect((await db.meta.get('lastNoteId'))?.value).toBe(note!.id),
@@ -178,6 +189,9 @@ describe('App', () => {
 describe('App sync triggers', () => {
   beforeEach(async () => {
     await db.notes.clear()
+    await db.classes.clear()
+    await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)
@@ -252,6 +266,9 @@ describe('App sync triggers', () => {
 describe('App remembering the open note', () => {
   beforeEach(async () => {
     await db.notes.clear()
+    await db.classes.clear()
+    await db.notebooks.clear()
+    await db.deadlines.clear()
     await db.meta.clear()
     await i18n.changeLanguage('en')
     vi.mocked(me).mockResolvedValue(account)
@@ -298,7 +315,7 @@ describe('App remembering the open note', () => {
     await waitFor(() =>
       expect(document.querySelector('.app')!.getAttribute('style')).toContain('300px'),
     )
-    expect(document.querySelector('.note')).toBeNull()
+    noEditor()
   })
 
   it('falls back to Home when the remembered id is not in the database', async () => {
@@ -314,7 +331,7 @@ describe('App remembering the open note', () => {
       expect(document.querySelector('.app')!.getAttribute('style')).toContain('300px'),
     )
     await screen.findByRole('button', { name: /^Diskrétna/ })
-    expect(document.querySelector('.note')).toBeNull()
+    noEditor()
   })
 })
 
@@ -491,6 +508,15 @@ const noteRows = () =>
 
 // TipTap's editable node, which is what `.editor` now holds.
 const editor = () => document.querySelector('.tiptap')
+
+// TipTap builds .tiptap in an effect, a tick after the commit that puts the
+// editor on screen, so its arrival is always waited for.
+const openEditor = () => waitFor(() => expect(editor()).not.toBeNull())
+
+// Absence is asked of .note, the branch that commits with the state that opens
+// a note. Asking .tiptap would pass in the gap before the effect runs, which is
+// a test that cannot fail.
+const noEditor = () => expect(document.querySelector('.note')).toBeNull()
 
 const railRows = () =>
   within(screen.getByRole('navigation', { name: 'Classes' }))
@@ -682,7 +708,7 @@ describe('App class rail', () => {
       expect(await listNotes(notebook.id)).toHaveLength(2),
     )
     // The new note is open, with the cursor in it.
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
     // The editor defers taking focus to an animation frame, so the cursor
     // arrives a tick after the editor does.
     await waitFor(() =>
@@ -882,7 +908,7 @@ describe('App two panes', () => {
     await waitFor(async () =>
       expect((await db.meta.get('lastClassId'))?.value).toBe(discrete!.id),
     )
-    expect(document.querySelector('.note')).toBeNull()
+    noEditor()
   })
 
   it('opens the editor on a card and returns to the class page on Escape', async () => {
@@ -893,7 +919,7 @@ describe('App two panes', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Množiny/ }))
 
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
     expect(screen.queryByRole('list', { name: 'Notes' })).toBeNull()
     // The class it belongs to is named at the top, muted and small, and it
     // is the way back.
@@ -907,7 +933,7 @@ describe('App two panes', () => {
     await waitFor(async () =>
       expect(await db.meta.get('lastNoteId')).toBeUndefined(),
     )
-    expect(document.querySelector('.note')).toBeNull()
+    noEditor()
   })
 
   it('returns to the class page with the back button', async () => {
@@ -915,11 +941,11 @@ describe('App two panes', () => {
     render(<App />)
     fireEvent.click(await inRail(/^Diskrétna matematika/))
     fireEvent.click(await screen.findByRole('button', { name: /^Množiny/ }))
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
 
     fireEvent.click(screen.getByRole('button', { name: /^Back to/ }))
 
-    await waitFor(() => expect(editor()).toBeNull())
+    noEditor()
     expect(noteRows()).toHaveLength(1)
   })
 
@@ -981,7 +1007,7 @@ describe('App two panes', () => {
     // yet, so the note is unfiled — and it still opens.
     fireEvent.keyDown(window, { key: 'n' })
     await waitFor(async () => expect(await listNotes(null)).toHaveLength(1))
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
 
     fireEvent.keyDown(window, { key: 'Escape' })
     fireEvent.click(await inRail(/^Diskrétna matematika/))
@@ -1713,9 +1739,13 @@ describe('App collegebooks', () => {
     await waitFor(async () =>
       expect((await db.notebooks.get(book.id))!.settings).toBeNull(),
     )
-    // And the page is back to the defaults without being reopened.
-    expect(document.querySelector('.book')!.getAttribute('data-ruling')).toBe(
-      'ruled',
+    // And the page is back to the defaults without being reopened. Waited for,
+    // because the row is written before App re-reads the notebooks and renders
+    // the sheet from them.
+    await waitFor(() =>
+      expect(document.querySelector('.book')!.getAttribute('data-ruling')).toBe(
+        'ruled',
+      ),
     )
     ask.mockRestore()
   })
@@ -1780,7 +1810,7 @@ describe('App deadline topics', () => {
 
     fireEvent.click(await chip('Karteziánsky súčin'))
 
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
     await waitFor(() => {
       const landed = scroll.mock.contexts.at(-1) as Element | undefined
       expect(landed?.tagName).toBe('H2')
@@ -1801,7 +1831,7 @@ describe('App deadline topics', () => {
     await screen.findByText('“Relácie” is no longer in this note.')
     // The message and the editor's branch commit together, but TipTap builds
     // .tiptap in an effect after that commit, so it is waited for.
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
     // After the editor exists, so "it did not scroll" is said of an editor
     // that could have.
     expect(scroll).not.toHaveBeenCalled()
@@ -1818,7 +1848,7 @@ describe('App deadline topics', () => {
     // openTopic returns once it has said so, so the message is its last commit
     // and an editor it opened would be in the same one. The branch is checked
     // and not .tiptap, which trails that commit by an effect.
-    expect(document.querySelector('.note')).toBeNull()
+    noEditor()
     screen.getByRole('heading', { name: 'Diskrétna matematika' })
   })
 })
@@ -1869,7 +1899,7 @@ describe('App home', () => {
       await within(await recents()).findByRole('button', { name: /^Množiny/ }),
     )
 
-    await waitFor(() => expect(editor()).not.toBeNull())
+    await openEditor()
     // Not by way of its class: the class page was never on screen, and the
     // way back is to where the click came from.
     expect(screen.queryByRole('heading', { name: 'Diskrétna matematika' })).toBeNull()
