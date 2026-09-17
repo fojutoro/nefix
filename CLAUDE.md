@@ -69,7 +69,9 @@ AGPL-3.0, meant to be contributable by strangers.
 
 ## Out of scope for v1 — refuse and cite this file
 
-Annotation, highlighting, drawing, Apple Pencil. Comments. Any file
+A manual annotation layer: marks drawn over content, with Apple Pencil
+or otherwise. A markdown mark applied to typed text, such as a
+highlight, is ordinary formatting and not annotation. Comments. Any file
 upload. Code execution. Tauri builds. Majors, minors, badges,
 categories. Follows, feeds, notifications, likes. Password reset, email
 verification. Real-time collaborative editing. Search across other

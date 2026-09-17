@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core'
+import { Editor, type Content, type JSONContent } from '@tiptap/core'
 import { describe, expect, it } from 'vitest'
 import { editorExtensions } from './Editor.tsx'
 
@@ -31,6 +31,34 @@ function roundTrip(markdown: string): string {
 // without it is comparing the part either side actually disagrees about.
 const body = (markdown: string) => markdown.replace(/\n*$/, '')
 
+// For the tests that care which marks the document carries, and not only what
+// it serialises back to.
+function load(content: Content, contentType?: 'markdown') {
+  const element = document.createElement('div')
+  document.body.appendChild(element)
+  const editor = new Editor({
+    element,
+    extensions: editorExtensions(),
+    content,
+    ...(contentType === undefined ? {} : { contentType }),
+  })
+  const loaded = { json: editor.getJSON(), markdown: editor.getMarkdown() }
+  editor.destroy()
+  element.remove()
+  return loaded
+}
+
+// Every run of text with the marks on it, as "both[bold+highlight]".
+const runs = (node: JSONContent): string[] =>
+  node.type === 'text'
+    ? [`${node.text}[${(node.marks ?? []).map((mark) => mark.type).join('+')}]`]
+    : (node.content ?? []).flatMap(runs)
+
+const paragraph = (...content: JSONContent[]): JSONContent => ({
+  type: 'doc',
+  content: [{ type: 'paragraph', content }],
+})
+
 // Everything the app supports, and every one of these must survive untouched.
 const SURVIVES: Record<string, string> = {
   'atx headings': '# One\n\n## Two\n\n### Three',
@@ -53,6 +81,12 @@ const SURVIVES: Record<string, string> = {
   // The reason math.ts is still here. The extension's own tokeniser turns
   // this into a formula and eats a space; findMath is what keeps prose prose.
   'money, which is not maths': 'It costs $5 and $10 today.',
+  'highlight': 'A ==marked== word.',
+  'highlight holding bold': '==a **b** c==',
+  'bold holding a highlight': '**bold ==both==** after',
+  // Literal equals signs, escaped the way they are saved, including inside a
+  // highlight.
+  'escaped equals': 'if x \\== y, then ==y\\==z== holds',
 }
 
 // Rewritten but not damaged: every cell is still there and a second pass
@@ -63,6 +97,12 @@ const REFORMATTED: Record<string, { from: string; to: string }> = {
     from: '| Term | Meaning      |\n| ---- | ------------ |\n| set  | a collection |',
     to: '\n| Term | Meaning      |\n| ---- | ------------ |\n| set  | a collection |',
   },
+  // Not a highlight here, but the same characters would be one beside a word,
+  // so every literal == is saved escaped.
+  'literal == is escaped on save': {
+    from: 'if x == y then',
+    to: 'if x \\== y then',
+  },
 }
 
 // One note holding the lot, because constructs interact: a list directly
@@ -71,7 +111,7 @@ const REFORMATTED: Record<string, { from: string; to: string }> = {
 // separators are the ones a person would actually type.
 const WHOLE = `# Diskrétna matematika
 
-Text with **bold** and *italic* words, plus \`go vet\` and ~~struck~~ words.
+Text with **bold** and *italic* words, plus \`go vet\`, ~~struck~~ and ==marked== words.
 
 ## Definície
 
@@ -144,6 +184,60 @@ describe('constructs that are rewritten but keep everything', () => {
       expect(body(roundTrip(to))).toBe(body(to))
     })
   }
+})
+
+describe('highlight and literal equals signs', () => {
+  it('reads ==text== as a highlight mark, nested with others', () => {
+    expect(runs(load('**bold ==both==** after', 'markdown').json)).toEqual([
+      'bold [bold]',
+      'both[bold+highlight]',
+      ' after[]',
+    ])
+  })
+
+  // The guard on the override in Editor.tsx. escapeMarkdownSyntax is an
+  // internal method of @tiptap/markdown's manager, wrapped there because no
+  // extension hook reaches text serialisation. If an upgrade renames it or
+  // stops calling it, `==` is saved bare and this fails.
+  it('saves literal == as \\== through the real editor, and reads it back literal', () => {
+    const saved = load(paragraph({ type: 'text', text: 'a ==b== c' })).markdown
+
+    expect(body(saved)).toBe('a \\==b\\== c')
+    expect(runs(load(saved, 'markdown').json)).toEqual(['a ==b== c[]'])
+  })
+
+  it('reads \\== as literal equals signs, not a highlight', () => {
+    expect(runs(load('a \\==b\\== c', 'markdown').json)).toEqual(['a ==b== c[]'])
+  })
+
+  it('keeps literal == literal inside a highlight', () => {
+    const saved = load(
+      paragraph({ type: 'text', text: 'y==z', marks: [{ type: 'highlight' }] }),
+    ).markdown
+
+    expect(body(saved)).toBe('==y\\==z==')
+    expect(runs(load(saved, 'markdown').json)).toEqual(['y==z[highlight]'])
+  })
+
+  // Known behaviour, recorded rather than open. A note written before
+  // highlighting existed can hold a literal ==x==, and it loads as a
+  // highlight. Its characters are identical to a highlight's, so no parser can
+  // tell which was meant; escaping disambiguates only what is saved from now
+  // on. This is a fact about the format, not a bug to close.
+  it('reads an unescaped ==x== from before highlighting existed as a highlight', () => {
+    expect(runs(load('Remember ==this== part.', 'markdown').json)).toEqual([
+      'Remember []',
+      'this[highlight]',
+      ' part.[]',
+    ])
+  })
+
+  // Known behaviour, fojutoro/nefix#66: a mark does not stay on an inline
+  // formula, so a highlight spanning one shrinks to the prose beside it. No
+  // text is lost, and bold does the same.
+  it('drops a highlight off a formula it spans', () => {
+    expect(body(roundTrip('A ==$x^2$ formula== here'))).toBe('A $x^2$ ==formula== here')
+  })
 })
 
 describe('constructs known to be lost', () => {
